@@ -113,14 +113,36 @@ class FreematicaConfig(models.Model):
     last_test_message = fields.Text(string='Resultado última prueba', readonly=True)
 
     # ── Sincronización de proveedores (freematica.provider) ─────────────
-    providers_last_sync_at = fields.Datetime(string='Última sincronización de proveedores', readonly=True)
+    # Reanudable por páginas: cada corrida (botón o cron) procesa lo que
+    # entre en un presupuesto de tiempo seguro y guarda en qué página se
+    # quedó (providers_sync_next_page). Al llegar al final de una pasada
+    # completa, el cursor vuelve a 1 y no se arranca una pasada nueva hasta
+    # que pase providers_sync_interval_hours desde la última completada —
+    # evita tanto superar limit_time_real como resincronizar sin necesidad.
+    providers_last_sync_at = fields.Datetime(string='Última sincronización completa', readonly=True)
     providers_last_sync_count = fields.Integer(string='Proveedores sincronizados', readonly=True)
     providers_last_sync_error = fields.Text(string='Último error de sincronización', readonly=True)
+    providers_sync_next_page = fields.Integer(string='Próxima página a sincronizar', default=1, readonly=True)
+    providers_sync_count_so_far = fields.Integer(string='Sincronizados en la pasada actual', default=0, readonly=True)
+    providers_sync_interval_hours = fields.Integer(
+        string='Repetir pasada completa cada (horas)', default=24,
+        help='Una vez terminada una pasada completa, no se arranca otra hasta que pasen '
+             'estas horas. El botón manual "Sincronizar proveedores" siempre fuerza el '
+             'inicio de una pasada (o continúa la que esté en curso) sin importar esto.',
+    )
 
     # ── Sincronización del plan de cuentas (freematica.account) ─────────
-    accounts_last_sync_at = fields.Datetime(string='Última sincronización de cuentas', readonly=True)
+    accounts_last_sync_at = fields.Datetime(string='Última sincronización completa', readonly=True)
     accounts_last_sync_count = fields.Integer(string='Cuentas sincronizadas', readonly=True)
     accounts_last_sync_error = fields.Text(string='Último error de sincronización (cuentas)', readonly=True)
+    accounts_sync_next_page = fields.Integer(string='Próxima página a sincronizar', default=1, readonly=True)
+    accounts_sync_count_so_far = fields.Integer(string='Sincronizadas en la pasada actual', default=0, readonly=True)
+    accounts_sync_interval_hours = fields.Integer(
+        string='Repetir pasada completa cada (horas)', default=24,
+        help='Una vez terminada una pasada completa, no se arranca otra hasta que pasen '
+             'estas horas. El botón manual "Sincronizar cuentas" siempre fuerza el inicio '
+             'de una pasada (o continúa la que esté en curso) sin importar esto.',
+    )
 
     @api.model
     def get_active_config(self):
@@ -195,36 +217,58 @@ class FreematicaConfig(models.Model):
                 raise UserError(error.mensaje) from error
         return True
 
+    def _sync_notification(self, title, next_page, count_so_far, last_count):
+        if next_page <= 1:
+            message = 'Pasada completa terminada: %d sincronizados.' % last_count
+            notif_type = 'success'
+        else:
+            message = (
+                'En progreso: %d sincronizados hasta ahora, continúa en la página %d. '
+                'Se sigue solo al volver a apretar el botón, o lo retoma el cron automáticamente.'
+            ) % (count_so_far, next_page)
+            notif_type = 'warning'
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {'title': title, 'message': message, 'type': notif_type, 'sticky': next_page > 1},
+        }
+
     def action_sync_providers(self):
-        for record in self:
-            try:
-                self.env['freematica.provider'].sync_from_freematica(record)
-            except client.FreematicaError as error:
-                raise UserError(error.mensaje) from error
-        return True
+        self.ensure_one()
+        try:
+            self.env['freematica.provider'].sync_from_freematica(self, force=True)
+        except client.FreematicaError as error:
+            raise UserError(error.mensaje) from error
+        return self._sync_notification(
+            'Freematica: proveedores', self.providers_sync_next_page,
+            self.providers_sync_count_so_far, self.providers_last_sync_count,
+        )
 
     @api.model
     def _cron_sync_providers(self):
         configs = self.search([('active', '=', True)])
         for config in configs:
             try:
-                self.env['freematica.provider'].sync_from_freematica(config)
+                self.env['freematica.provider'].sync_from_freematica(config, force=False)
             except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
                 _logger.error('Freematica: fallo sincronizando proveedores (config %s): %s', config.id, error)
 
     def action_sync_accounts(self):
-        for record in self:
-            try:
-                self.env['freematica.account'].sync_from_freematica(record)
-            except client.FreematicaError as error:
-                raise UserError(error.mensaje) from error
-        return True
+        self.ensure_one()
+        try:
+            self.env['freematica.account'].sync_from_freematica(self, force=True)
+        except client.FreematicaError as error:
+            raise UserError(error.mensaje) from error
+        return self._sync_notification(
+            'Freematica: plan de cuentas', self.accounts_sync_next_page,
+            self.accounts_sync_count_so_far, self.accounts_last_sync_count,
+        )
 
     @api.model
     def _cron_sync_accounts(self):
         configs = self.search([('active', '=', True)])
         for config in configs:
             try:
-                self.env['freematica.account'].sync_from_freematica(config)
+                self.env['freematica.account'].sync_from_freematica(config, force=False)
             except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
                 _logger.error('Freematica: fallo sincronizando cuentas (config %s): %s', config.id, error)

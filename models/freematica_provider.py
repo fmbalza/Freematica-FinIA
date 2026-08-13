@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
+import time
+from datetime import timedelta
 
 from odoo import api, fields, models
 
@@ -9,6 +11,12 @@ from ..services import freematica_matching as matching
 _logger = logging.getLogger(__name__)
 
 _SYNC_PAGE_SIZE = 500
+
+# Ver freematica_account.py: mismo mecanismo de presupuesto de tiempo +
+# cursor reanudable, por el mismo riesgo de superar limit_time_real (menor
+# aquí con solo ~4 páginas para 1828 proveedores, pero el mecanismo es
+# igual de válido si el catálogo crece o la red está lenta ese día).
+_SYNC_TIME_BUDGET_SECONDS = 90
 
 
 class FreematicaProvider(models.Model):
@@ -56,26 +64,32 @@ class FreematicaProvider(models.Model):
             record.normalized_nif = matching.normalize_nif(record.nif)
 
     @api.model
-    def sync_from_freematica(self, config=None):
-        """Mismo fix que freematica.account.sync_from_freematica: con 1828
-        proveedores, un `search()` + `write()`/`create()` por registro son
-        ~3650 queries secuenciales — mismo riesgo de superar
-        `limit_time_real` y perder todo el trabajo sin commit (confirmado
-        en producción para el sync de cuentas, 2026-08-13). Índice
-        existente cargado en un solo `search()`, altas en lote, escritura
-        solo si algo cambió, y commit por página."""
+    def sync_from_freematica(self, config=None, force=False):
+        """Reanudable, ver freematica_account.py::sync_from_freematica
+        (mismo mecanismo: presupuesto de tiempo por corrida, cursor de
+        página persistido, altas en lote, escritura solo si cambió algo,
+        commit por página, y una pasada completa no se repite antes de
+        `providers_sync_interval_hours` salvo `force=True`)."""
         config = config or self.env['freematica.config'].get_active_config()
+
+        if config.providers_sync_next_page <= 1 and not force and config.providers_last_sync_at:
+            interval = timedelta(hours=config.providers_sync_interval_hours or 24)
+            if fields.Datetime.now() - config.providers_last_sync_at < interval:
+                return 0
+
         client_config = config._as_client_config()
         token = config._ensure_valid_token()
         now = fields.Datetime.now()
+        deadline = time.monotonic() + _SYNC_TIME_BUDGET_SECONDS
 
         existing_by_key = {r.cod_pro: r for r in self.search([])}
 
-        page = 1
+        page = config.providers_sync_next_page or 1
         total = None
-        count = 0
+        count_this_run = 0
+        finished = False
         try:
-            while True:
+            while time.monotonic() < deadline:
                 result = client.list_proveedores(
                     client_config, page=page, items=_SYNC_PAGE_SIZE, token=token,
                 )
@@ -87,6 +101,7 @@ class FreematicaProvider(models.Model):
                     except (TypeError, ValueError):
                         total = None
                 if not items:
+                    finished = True
                     break
 
                 to_create = []
@@ -112,30 +127,45 @@ class FreematicaProvider(models.Model):
                             existing.write(vals)
                     else:
                         to_create.append(dict(vals, last_synced_at=now))
-                    count += 1
+                    count_this_run += 1
 
                 if to_create:
                     created = self.create(to_create)
                     for record in created:
                         existing_by_key[record.cod_pro] = record
 
+                page_was_short = len(items) < _SYNC_PAGE_SIZE
+                page_reached_total = total is not None and page * _SYNC_PAGE_SIZE >= total
+                page += 1
                 self.env.cr.commit()
 
-                if len(items) < _SYNC_PAGE_SIZE:
+                if page_was_short or page_reached_total:
+                    finished = True
                     break
-                if total is not None and page * _SYNC_PAGE_SIZE >= total:
-                    break
-                page += 1
         except client.FreematicaError as error:
             config.write({'providers_last_sync_error': error.mensaje})
             self.env.cr.commit()
             raise
 
-        config.write({
-            'providers_last_sync_at': now,
-            'providers_last_sync_count': count,
-            'providers_last_sync_error': False,
-        })
+        count_so_far = (config.providers_sync_count_so_far or 0) + count_this_run
+        if finished:
+            config.write({
+                'providers_sync_next_page': 1,
+                'providers_sync_count_so_far': 0,
+                'providers_last_sync_at': now,
+                'providers_last_sync_count': count_so_far,
+                'providers_last_sync_error': False,
+            })
+            _logger.info('Freematica: pasada completa de proveedores terminada (%d proveedores)', count_so_far)
+        else:
+            config.write({
+                'providers_sync_next_page': page,
+                'providers_sync_count_so_far': count_so_far,
+                'providers_last_sync_error': False,
+            })
+            _logger.info(
+                'Freematica: sync de proveedores en progreso (%d hasta ahora), retoma en página %d',
+                count_so_far, page,
+            )
         self.env.cr.commit()
-        _logger.info('Freematica: %s proveedores sincronizados', count)
-        return count
+        return count_so_far

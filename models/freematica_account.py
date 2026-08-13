@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
 import logging
+import time
+from datetime import timedelta
 
 from odoo import api, fields, models
 
@@ -12,6 +14,16 @@ _logger = logging.getLogger(__name__)
 # ("Valor máximo permitido 100"), a diferencia de /pgrl/v2/proveedores que
 # acepta hasta 2000. Con ~5470 cuentas son ~55 páginas por sync.
 _SYNC_PAGE_SIZE = 100
+
+# Presupuesto de tiempo por corrida, no número fijo de páginas: confirmado
+# en producción (2026-08-13) que intentar las ~55 páginas en una sola
+# corrida supera limit_time_real (120s por defecto en Odoo) y el worker
+# HTTP la mata sin haber hecho commit, perdiendo todo el trabajo. Con un
+# presupuesto de tiempo, cada corrida (botón o cron) avanza lo que la
+# latencia real de red permita y guarda un cursor para retomar en la
+# siguiente — se adapta sola a que un día la API esté más lenta que otro,
+# a diferencia de un número fijo de páginas por corrida.
+_SYNC_TIME_BUDGET_SECONDS = 90
 
 
 class FreematicaAccount(models.Model):
@@ -58,29 +70,39 @@ class FreematicaAccount(models.Model):
         return self.search(domain, limit=limit)
 
     @api.model
-    def sync_from_freematica(self, config=None):
-        """Con ~5470 cuentas (55 páginas de 100), un `search()` +
-        `write()`/`create()` por registro son ~11.000 queries secuenciales
-        — confirmado en producción (2026-08-13) que eso hace que el sync
-        supere `limit_time_real` (120s) y el worker HTTP lo mate a mitad de
-        camino, sin commit, perdiendo todo el trabajo. Por eso: se carga el
-        índice existente en un solo `search()`, los nuevos se crean en un
-        único `create()` por lote, los existentes solo se escriben si algo
-        realmente cambió (en réplicas diarias, casi ninguno cambia), y se
-        hace commit página por página para no perder el progreso si el
-        worker igual se queda sin tiempo."""
+    def sync_from_freematica(self, config=None, force=False):
+        """Reanudable: procesa páginas hasta agotar el presupuesto de
+        tiempo de esta corrida, guarda en qué página se quedó
+        (`accounts_sync_next_page`) y retoma ahí la próxima vez (botón o
+        cron) — nunca intenta las ~55 páginas completas de una sola
+        corrida. Al terminar una pasada completa, el cursor vuelve a 1 y
+        no se arranca otra hasta pasadas `accounts_sync_interval_hours`
+        (salvo `force=True`, que además ignora ese intervalo).
+
+        Además: índice de existentes cargado en un solo `search()`, altas
+        en un único `create()` por lote, y solo se escribe un existente si
+        algo realmente cambió — evita las ~11.000 queries secuenciales que
+        antes hacían perder todo el trabajo al superar `limit_time_real`."""
         config = config or self.env['freematica.config'].get_active_config()
+
+        if config.accounts_sync_next_page <= 1 and not force and config.accounts_last_sync_at:
+            interval = timedelta(hours=config.accounts_sync_interval_hours or 24)
+            if fields.Datetime.now() - config.accounts_last_sync_at < interval:
+                return 0
+
         client_config = config._as_client_config()
         token = config._ensure_valid_token()
         now = fields.Datetime.now()
+        deadline = time.monotonic() + _SYNC_TIME_BUDGET_SECONDS
 
         existing_by_key = {(r.cod_plan, r.cod_cta): r for r in self.search([])}
 
-        page = 1
+        page = config.accounts_sync_next_page or 1
         total = None
-        count = 0
+        count_this_run = 0
+        finished = False
         try:
-            while True:
+            while time.monotonic() < deadline:
                 result = client.list_cuentas(
                     client_config, page=page, items=_SYNC_PAGE_SIZE, token=token,
                 )
@@ -92,6 +114,7 @@ class FreematicaAccount(models.Model):
                     except (TypeError, ValueError):
                         total = None
                 if not items:
+                    finished = True
                     break
 
                 to_create = []
@@ -115,30 +138,45 @@ class FreematicaAccount(models.Model):
                             existing.write(vals)
                     else:
                         to_create.append(dict(vals, last_synced_at=now))
-                    count += 1
+                    count_this_run += 1
 
                 if to_create:
                     created = self.create(to_create)
                     for record in created:
                         existing_by_key[(record.cod_plan, record.cod_cta)] = record
 
+                page_was_short = len(items) < _SYNC_PAGE_SIZE
+                page_reached_total = total is not None and page * _SYNC_PAGE_SIZE >= total
+                page += 1
                 self.env.cr.commit()
 
-                if len(items) < _SYNC_PAGE_SIZE:
+                if page_was_short or page_reached_total:
+                    finished = True
                     break
-                if total is not None and page * _SYNC_PAGE_SIZE >= total:
-                    break
-                page += 1
         except client.FreematicaError as error:
             config.write({'accounts_last_sync_error': error.mensaje})
             self.env.cr.commit()
             raise
 
-        config.write({
-            'accounts_last_sync_at': now,
-            'accounts_last_sync_count': count,
-            'accounts_last_sync_error': False,
-        })
+        count_so_far = (config.accounts_sync_count_so_far or 0) + count_this_run
+        if finished:
+            config.write({
+                'accounts_sync_next_page': 1,
+                'accounts_sync_count_so_far': 0,
+                'accounts_last_sync_at': now,
+                'accounts_last_sync_count': count_so_far,
+                'accounts_last_sync_error': False,
+            })
+            _logger.info('Freematica: pasada completa de cuentas terminada (%d cuentas)', count_so_far)
+        else:
+            config.write({
+                'accounts_sync_next_page': page,
+                'accounts_sync_count_so_far': count_so_far,
+                'accounts_last_sync_error': False,
+            })
+            _logger.info(
+                'Freematica: sync de cuentas en progreso (%d hasta ahora), retoma en página %d',
+                count_so_far, page,
+            )
         self.env.cr.commit()
-        _logger.info('Freematica: %s cuentas contables sincronizadas', count)
-        return count
+        return count_so_far

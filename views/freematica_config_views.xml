@@ -65,13 +65,19 @@
                     </group>
                     <group>
                         <group string="Sincronización de proveedores">
+                            <field name="providers_sync_interval_hours"/>
                             <field name="providers_last_sync_at" readonly="1"/>
                             <field name="providers_last_sync_count" readonly="1"/>
+                            <field name="providers_sync_next_page" readonly="1"/>
+                            <field name="providers_sync_count_so_far" readonly="1"/>
                             <field name="providers_last_sync_error" readonly="1" widget="text"/>
                         </group>
                         <group string="Sincronización del plan de cuentas">
+                            <field name="accounts_sync_interval_hours"/>
                             <field name="accounts_last_sync_at" readonly="1"/>
                             <field name="accounts_last_sync_count" readonly="1"/>
+                            <field name="accounts_sync_next_page" readonly="1"/>
+                            <field name="accounts_sync_count_so_far" readonly="1"/>
                             <field name="accounts_last_sync_error" readonly="1" widget="text"/>
                         </group>
                     </group>
