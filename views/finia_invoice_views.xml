@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="finia_invoice_view_form_freematica" model="ir.ui.view">
+        <field name="name">finia.invoice.view.form.freematica</field>
+        <field name="model">finia.invoice</field>
+        <field name="inherit_id" ref="finIA_backend.finia_invoice_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//page[@name='logs']" position="before">
+                <page string="Freematica" name="freematica">
+                    <group>
+                        <group>
+                            <field name="freematica_state" widget="badge"
+                                   decoration-success="freematica_state == 'enviado'"
+                                   decoration-danger="freematica_state == 'error'"
+                                   decoration-info="freematica_state in ('no_enviado', 'enviando')"/>
+                            <field name="freematica_sent_at" readonly="1"/>
+                            <field name="freematica_borr_cod" readonly="1"/>
+                        </group>
+                        <group>
+                            <field name="freematica_error" readonly="1" widget="text"/>
+                        </group>
+                    </group>
+                </page>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="finia_invoice_view_list_freematica" model="ir.ui.view">
+        <field name="name">finia.invoice.view.list.freematica</field>
+        <field name="model">finia.invoice</field>
+        <field name="inherit_id" ref="finIA_backend.finia_invoice_view_list"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='line_count']" position="after">
+                <field name="freematica_state" widget="badge"
+                       decoration-success="freematica_state == 'enviado'"
+                       decoration-danger="freematica_state == 'error'"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>

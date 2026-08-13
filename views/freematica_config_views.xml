@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="freematica_config_view_tree" model="ir.ui.view">
+        <field name="name">freematica.config.view.tree</field>
+        <field name="model">freematica.config</field>
+        <field name="arch" type="xml">
+            <list>
+                <field name="name"/>
+                <field name="host"/>
+                <field name="x_auth_organization"/>
+                <field name="x_auth_company"/>
+                <field name="active"/>
+                <field name="last_test_ok" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="freematica_config_view_form" model="ir.ui.view">
+        <field name="name">freematica.config.view.form</field>
+        <field name="model">freematica.config</field>
+        <field name="arch" type="xml">
+            <form>
+                <header>
+                    <button name="action_test_connection" string="Probar conexión" type="object" class="btn-primary"/>
+                    <button name="action_renew_token" string="Renovar token (login)" type="object"/>
+                </header>
+                <sheet>
+                    <group>
+                        <group string="Conexión">
+                            <field name="name"/>
+                            <field name="active"/>
+                            <field name="host"/>
+                            <field name="x_auth_organization"/>
+                            <field name="x_auth_company"/>
+                            <field name="x_auth_session"/>
+                            <field name="x_auth_app"/>
+                            <field name="language"/>
+                            <field name="request_timeout"/>
+                        </group>
+                        <group string="Autenticación">
+                            <field name="access_token" password="True"/>
+                            <field name="token_obtained_at" readonly="1"/>
+                            <field name="login_username"/>
+                            <field name="login_password" password="True"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Datos contables por defecto">
+                            <field name="diario_compras"/>
+                            <field name="cuenta_proveedor_default"/>
+                            <field name="cuenta_iva_soportado_default"/>
+                            <field name="serie_contable_default"/>
+                            <field name="grupo_aux_proveedor"/>
+                            <field name="concepto_asiento_default"/>
+                            <field name="lineas_as_json_string"/>
+                        </group>
+                        <group string="Última prueba de conexión">
+                            <field name="last_test_at" readonly="1"/>
+                            <field name="last_test_ok" readonly="1"/>
+                            <field name="last_test_message" readonly="1" widget="text"/>
+                        </group>
+                    </group>
+                </sheet>
+            </form>
+        </field>
+    </record>
+
+    <record id="freematica_config_action" model="ir.actions.act_window">
+        <field name="name">Configuración Freematica</field>
+        <field name="res_model">freematica.config</field>
+        <field name="view_mode">list,form</field>
+    </record>
+</odoo>

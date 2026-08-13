@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="finia_ocr_vendor_form_view_freematica" model="ir.ui.view">
+        <field name="name">finia.ocr.vendor.form.freematica</field>
+        <field name="model">finia.ocr.vendor</field>
+        <field name="inherit_id" ref="finIA_backend.finia_ocr_vendor_form_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//sheet/group" position="after">
+                <group string="Freematica">
+                    <field name="nif"/>
+                    <field name="freematica_cod_aux"/>
+                </group>
+            </xpath>
+        </field>
+    </record>
+
+    <record id="finia_ocr_vendor_list_view_freematica" model="ir.ui.view">
+        <field name="name">finia.ocr.vendor.list.freematica</field>
+        <field name="model">finia.ocr.vendor</field>
+        <field name="inherit_id" ref="finIA_backend.finia_ocr_vendor_list_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='document_count']" position="before">
+                <field name="freematica_cod_aux"/>
+            </xpath>
+        </field>
+    </record>
+</odoo>
