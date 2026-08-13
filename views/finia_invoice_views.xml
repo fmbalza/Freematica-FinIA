@@ -5,6 +5,10 @@
         <field name="model">finia.invoice</field>
         <field name="inherit_id" ref="finIA_backend.finia_invoice_view_form"/>
         <field name="arch" type="xml">
+            <xpath expr="//button[@name='action_send_to_freematica']" position="before">
+                <button name="action_freematica_check" string="Verificar Freematica" type="object"
+                        title="Corre todas las validaciones sin llamar a la API — audita antes de gastar un intento real"/>
+            </xpath>
             <xpath expr="//page[@name='logs']" position="before">
                 <page string="Freematica" name="freematica">
                     <group>

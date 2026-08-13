@@ -13,49 +13,76 @@ class FiniaInvoice(models.Model):
     _inherit = ['finia.invoice', 'freematica.sendable.mixin']
 
     def _freematica_validate_before_send(self):
+        """Junta TODOS los problemas encontrados en un solo UserError, en
+        vez de fallar con el primero — evita el ciclo de "corrijo uno,
+        reintento, aparece el siguiente" y deja ver de una vez todo lo que
+        falta antes de intentar el envío real."""
         self.ensure_one()
-        if self.state != 'contabilizado':
-            raise UserError(_(
-                'Solo se pueden enviar a Freematica facturas en estado "Contabilizado" '
-                '(fecha contable, referencia y demás datos contables se fijan en ese paso). '
-                'La factura "%s" está en estado "%s" — termina primero el flujo de revisión '
-                'en Finia.'
-            ) % (self.display_name, dict(self._fields['state'].selection).get(self.state, self.state)))
+        problems = []
 
-        missing = []
+        if self.state != 'contabilizado':
+            problems.append(
+                'la factura debe estar en estado "Contabilizado" (fecha contable, '
+                'referencia y demás datos contables se fijan en ese paso); está en "%s"'
+                % dict(self._fields['state'].selection).get(self.state, self.state)
+            )
         if not (self.ocr_invoice_number or self.name):
-            missing.append('número de factura')
+            problems.append('falta el número de factura')
         if not self.ocr_invoice_date:
-            missing.append('fecha de factura')
+            problems.append('falta la fecha de factura')
         if not self.accounting_date:
-            missing.append('fecha contable')
+            problems.append('falta la fecha contable')
         if not self.line_ids:
-            missing.append('líneas de factura')
+            problems.append('la factura no tiene líneas')
         if not self.ocr_total_amount:
-            missing.append('importe total')
-        if not self.ocr_vendor_id:
-            missing.append('proveedor (OCR)')
-        if missing:
-            raise UserError(_(
-                'Faltan datos obligatorios para enviar la factura a Freematica: %s.'
-            ) % ', '.join(missing))
+            problems.append('falta el importe total')
 
         vendor = self.ocr_vendor_id
-        if vendor.freematica_match_state == 'no_intentado':
-            vendor._freematica_resolve_provider()
-        if not vendor.freematica_cod_aux:
-            raise UserError(_(
-                'El proveedor "%s" no tiene configurado su código auxiliar de Freematica '
-                '(finia.ocr.vendor.freematica_cod_aux), y no se encontró automáticamente en '
-                'el catálogo sincronizado (freematica.provider). Sincroniza proveedores desde '
-                'FinIA - Freematica > Configuración, o complétalo a mano.'
-            ) % vendor.name)
+        if not vendor:
+            problems.append('falta el proveedor (OCR)')
+        else:
+            if vendor.freematica_match_state == 'no_intentado':
+                vendor._freematica_resolve_provider()
+            if not vendor.freematica_cod_aux:
+                problems.append(
+                    'el proveedor "%s" no tiene código auxiliar de Freematica: ni coincidencia '
+                    'automática (sincroniza proveedores desde FinIA - Freematica > '
+                    'Configuración) ni completado a mano' % vendor.name
+                )
 
-        missing_accounts = self.line_ids.filtered(lambda l: not l.accounting_account)
-        if missing_accounts:
+        if self.line_ids:
+            missing_accounts = self.line_ids.filtered(lambda l: not l.accounting_account)
+            if missing_accounts:
+                names = ', '.join(n for n in missing_accounts.mapped('name') if n)
+                problems.append(
+                    '%d línea(s) sin cuenta contable de gasto resuelta (accounting_account): '
+                    '%s — asigna una categoría de gasto a la línea, o configura la cuenta por '
+                    'defecto del proveedor en finia.ocr.vendor.default_accounting_account'
+                    % (len(missing_accounts), names[:300])
+                )
+
+        if problems:
             raise UserError(_(
-                'Hay líneas de factura sin cuenta contable resuelta (accounting_account): %s.'
-            ) % ', '.join(n for n in missing_accounts.mapped('name') if n))
+                'No se puede enviar "%s" a Freematica — %d problema(s) encontrado(s):\n- %s'
+            ) % (self.display_name, len(problems), '\n- '.join(problems)))
+
+    def action_freematica_check(self):
+        """Corre la misma validación que se ejecuta antes de enviar, pero
+        sin llamar a la API — pensado para auditar una factura de antemano
+        y ver TODOS los problemas de una vez, sin gastar intentos reales
+        contra Freematica."""
+        self.ensure_one()
+        self._freematica_validate_before_send()
+        return {
+            'type': 'ir.actions.client',
+            'tag': 'display_notification',
+            'params': {
+                'title': _('Freematica'),
+                'message': _('"%s" pasó todas las validaciones — lista para enviar.') % self.display_name,
+                'type': 'success',
+                'sticky': False,
+            },
+        }
 
     def _freematica_doc_number(self):
         """Extrae la parte numérica de ocr_invoice_number para BORRL_DOC/
