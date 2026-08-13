@@ -32,11 +32,18 @@ class InvoiceController(_BaseInvoiceController):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
 
+        # Nota: SIEMPRE se responde HTTP 200, incluso cuando success=False.
+        # El cliente HTTP de Finia (api.service.ts) trata cualquier status
+        # no-2xx como excepción y descarta el cuerpo de la respuesta sin
+        # leerlo — si se devolviera 400/500 aquí, el frontend nunca vería
+        # `error`/`error_codes` (necesarios para decidir si abrir el modal
+        # de asignación de cuenta). Mismo patrón que ya usa
+        # email_controller.py::connect_email_imap en finIA_backend.
         try:
             Invoice = request.env['finia.invoice'].sudo()
             invoice = Invoice.browse(invoice_id)
             if not invoice.exists():
-                return json_response({'success': False, 'error': 'Invoice not found'}, 404)
+                return json_response({'success': False, 'error': 'Invoice not found'}, 200)
 
             result = invoice._freematica_send_one()
             return json_response({
@@ -49,10 +56,10 @@ class InvoiceController(_BaseInvoiceController):
                     'freematica_borr_cod': invoice.freematica_borr_cod,
                     'error_codes': result.get('error_codes') or [],
                 },
-            }, 200 if result.get('success') else 400)
+            }, 200)
         except Exception as e:  # noqa: BLE001 - responder JSON en vez de tumbar el request
             _logger.error('Send to Freematica: Error for invoice %s: %s', invoice_id, str(e))
             return json_response({
                 'success': False,
                 'error': str(e),
-            }, 500)
+            }, 200)

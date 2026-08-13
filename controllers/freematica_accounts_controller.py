@@ -14,6 +14,14 @@ from odoo.addons.finIA_backend.controllers.cors_utils import json_response, cors
 
 _logger = logging.getLogger(__name__)
 
+# Nota: todas las rutas de este controller responden SIEMPRE HTTP 200,
+# incluso cuando success=False. El cliente HTTP de Finia (api.service.ts)
+# trata cualquier status no-2xx como excepción y descarta el cuerpo de la
+# respuesta sin leerlo — si se devolviera 400/404/500, el frontend nunca
+# vería `error` y solo mostraría un mensaje genérico de catch. Mismo
+# patrón que ya usa email_controller.py::connect_email_imap en
+# finIA_backend.
+
 
 def _read_json_body():
     try:
@@ -73,7 +81,7 @@ class FreematicaAccountsController(http.Controller):
             })
         except Exception as error:
             _logger.error('Freematica search cuentas error: %s', error)
-            return json_response({'success': False, 'error': str(error)}, 500)
+            return json_response({'success': False, 'error': str(error)}, 200)
 
     @http.route('/api/v1/invoices/pending-accounting-account', type='http', auth='public', methods=['GET'], csrf=False)
     def pending_accounting_account(self, **kwargs):
@@ -85,7 +93,7 @@ class FreematicaAccountsController(http.Controller):
             limit = int(request.params.get('limit') or 100)
             offset = int(request.params.get('offset') or 0)
         except (TypeError, ValueError):
-            return json_response({'success': False, 'error': 'Invalid parameters'}, 400)
+            return json_response({'success': False, 'error': 'Invalid parameters'}, 200)
 
         try:
             Invoice = request.env['finia.invoice'].sudo()
@@ -107,7 +115,7 @@ class FreematicaAccountsController(http.Controller):
             })
         except Exception as error:
             _logger.error('Freematica pending-accounting-account error: %s', error)
-            return json_response({'success': False, 'error': str(error)}, 500)
+            return json_response({'success': False, 'error': str(error)}, 200)
 
     @http.route('/api/v1/invoices/<int:invoice_id>/assign-accounting-account', type='http', auth='public',
                 methods=['POST'], csrf=False)
@@ -123,13 +131,13 @@ class FreematicaAccountsController(http.Controller):
         apply_to_vendor_default = bool(body.get('apply_to_vendor_default'))
 
         if not accounting_account:
-            return json_response({'success': False, 'error': 'accounting_account is required'}, 400)
+            return json_response({'success': False, 'error': 'accounting_account is required'}, 200)
 
         try:
             Invoice = request.env['finia.invoice'].sudo()
             invoice = Invoice.browse(invoice_id)
             if not invoice.exists():
-                return json_response({'success': False, 'error': 'Invoice not found'}, 404)
+                return json_response({'success': False, 'error': 'Invoice not found'}, 200)
 
             valid_account = request.env['freematica.account'].sudo().search([
                 ('cod_cta', '=', accounting_account), ('cta_activa', '=', True), ('subcuenta', '=', True),
@@ -139,7 +147,7 @@ class FreematicaAccountsController(http.Controller):
                     'success': False,
                     'error': 'La cuenta "%s" no existe en el plan de cuentas de Freematica (o no es una '
                              'cuenta activa/imputable). Sincroniza cuentas si acaba de crearse.' % accounting_account,
-                }, 400)
+                }, 200)
 
             invoice.line_ids.write({'accounting_account': accounting_account})
             if apply_to_vendor_default and invoice.ocr_vendor_id:
@@ -155,4 +163,4 @@ class FreematicaAccountsController(http.Controller):
             })
         except Exception as error:
             _logger.error('Freematica assign-accounting-account error for invoice %s: %s', invoice_id, error)
-            return json_response({'success': False, 'error': str(error)}, 500)
+            return json_response({'success': False, 'error': str(error)}, 200)
