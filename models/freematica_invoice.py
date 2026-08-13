@@ -14,6 +14,14 @@ class FiniaInvoice(models.Model):
 
     def _freematica_validate_before_send(self):
         self.ensure_one()
+        if self.state != 'contabilizado':
+            raise UserError(_(
+                'Solo se pueden enviar a Freematica facturas en estado "Contabilizado" '
+                '(fecha contable, referencia y demás datos contables se fijan en ese paso). '
+                'La factura "%s" está en estado "%s" — termina primero el flujo de revisión '
+                'en Finia.'
+            ) % (self.display_name, dict(self._fields['state'].selection).get(self.state, self.state)))
+
         missing = []
         if not (self.ocr_invoice_number or self.name):
             missing.append('número de factura')
