@@ -29,6 +29,14 @@ class FreematicaProvider(models.Model):
              'como BORRL_CTA de la línea de proveedor al enviar sus facturas, con la cuenta '
              'de la configuración solo como respaldo si el proveedor no está matcheado.',
     )
+    cta_gasto = fields.Char(
+        string='Cuenta de gasto (CMP_CTA_GASTO)',
+        help='Cuenta de gasto (Debe) que este proveedor tiene asignada en Freematica, si la '
+             'tiene (campo opcional/personalizado: solo ~9% de los proveedores de Servinet la '
+             'tienen rellena, confirmado 2026-08-13). Cuando existe, se usa para autocompletar '
+             'finia.ocr.vendor.default_accounting_account al matchear — sin esto, esa cuenta '
+             'sigue siendo manual, Freematica no la expone para todos.',
+    )
     referencia = fields.Char(string='Referencia')
     poblacion = fields.Char(string='Población')
     email = fields.Char(string='Email')
@@ -80,6 +88,7 @@ class FreematicaProvider(models.Model):
                         'nombre_pro': item.get('NOMBRE_PRO'),
                         'nif': item.get('NIF'),
                         'cta_contable': item.get('CTA_CONTABLE'),
+                        'cta_gasto': item.get('CMP_CTA_GASTO'),
                         'referencia': item.get('REFERENCIA'),
                         'poblacion': item.get('COD_POBLACION'),
                         'email': item.get('E_MAIL'),

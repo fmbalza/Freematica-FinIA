@@ -78,17 +78,22 @@ class FiniaOcrVendor(models.Model):
                 vals['freematica_cod_aux'] = provider.cod_pro
             if not self.nif and provider.nif:
                 vals['nif'] = provider.nif
+            if not self.default_accounting_account and provider.cta_gasto:
+                vals['default_accounting_account'] = provider.cta_gasto
         self.write(vals)
         return self.freematica_provider_id
 
     def action_freematica_set_manual_match(self, provider_id):
         self.ensure_one()
         provider = self.env['freematica.provider'].browse(provider_id)
-        self.write({
+        vals = {
             'freematica_provider_id': provider.id,
             'freematica_match_state': 'coincidencia_manual',
             'freematica_match_score': 1.0,
             'freematica_matched_at': fields.Datetime.now(),
             'freematica_cod_aux': provider.cod_pro,
-        })
+        }
+        if not self.default_accounting_account and provider.cta_gasto:
+            vals['default_accounting_account'] = provider.cta_gasto
+        self.write(vals)
         return True
