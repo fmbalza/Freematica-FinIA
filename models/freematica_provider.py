@@ -57,10 +57,19 @@ class FreematicaProvider(models.Model):
 
     @api.model
     def sync_from_freematica(self, config=None):
+        """Mismo fix que freematica.account.sync_from_freematica: con 1828
+        proveedores, un `search()` + `write()`/`create()` por registro son
+        ~3650 queries secuenciales — mismo riesgo de superar
+        `limit_time_real` y perder todo el trabajo sin commit (confirmado
+        en producción para el sync de cuentas, 2026-08-13). Índice
+        existente cargado en un solo `search()`, altas en lote, escritura
+        solo si algo cambió, y commit por página."""
         config = config or self.env['freematica.config'].get_active_config()
         client_config = config._as_client_config()
         token = config._ensure_valid_token()
         now = fields.Datetime.now()
+
+        existing_by_key = {r.cod_pro: r for r in self.search([])}
 
         page = 1
         total = None
@@ -79,6 +88,8 @@ class FreematicaProvider(models.Model):
                         total = None
                 if not items:
                     break
+
+                to_create = []
                 for item in items:
                     cod_pro = item.get('COD_PRO')
                     if not cod_pro:
@@ -93,14 +104,23 @@ class FreematicaProvider(models.Model):
                         'poblacion': item.get('COD_POBLACION'),
                         'email': item.get('E_MAIL'),
                         'telefono': item.get('TELEFONO1'),
-                        'last_synced_at': now,
                     }
-                    existing = self.search([('cod_pro', '=', cod_pro)], limit=1)
+                    existing = existing_by_key.get(cod_pro)
                     if existing:
-                        existing.write(vals)
+                        changed = any(existing[field] != value for field, value in vals.items())
+                        if changed:
+                            existing.write(vals)
                     else:
-                        self.create(vals)
+                        to_create.append(dict(vals, last_synced_at=now))
                     count += 1
+
+                if to_create:
+                    created = self.create(to_create)
+                    for record in created:
+                        existing_by_key[record.cod_pro] = record
+
+                self.env.cr.commit()
+
                 if len(items) < _SYNC_PAGE_SIZE:
                     break
                 if total is not None and page * _SYNC_PAGE_SIZE >= total:
@@ -108,6 +128,7 @@ class FreematicaProvider(models.Model):
                 page += 1
         except client.FreematicaError as error:
             config.write({'providers_last_sync_error': error.mensaje})
+            self.env.cr.commit()
             raise
 
         config.write({
@@ -115,5 +136,6 @@ class FreematicaProvider(models.Model):
             'providers_last_sync_count': count,
             'providers_last_sync_error': False,
         })
+        self.env.cr.commit()
         _logger.info('Freematica: %s proveedores sincronizados', count)
         return count

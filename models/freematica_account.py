@@ -59,10 +59,22 @@ class FreematicaAccount(models.Model):
 
     @api.model
     def sync_from_freematica(self, config=None):
+        """Con ~5470 cuentas (55 páginas de 100), un `search()` +
+        `write()`/`create()` por registro son ~11.000 queries secuenciales
+        — confirmado en producción (2026-08-13) que eso hace que el sync
+        supere `limit_time_real` (120s) y el worker HTTP lo mate a mitad de
+        camino, sin commit, perdiendo todo el trabajo. Por eso: se carga el
+        índice existente en un solo `search()`, los nuevos se crean en un
+        único `create()` por lote, los existentes solo se escriben si algo
+        realmente cambió (en réplicas diarias, casi ninguno cambia), y se
+        hace commit página por página para no perder el progreso si el
+        worker igual se queda sin tiempo."""
         config = config or self.env['freematica.config'].get_active_config()
         client_config = config._as_client_config()
         token = config._ensure_valid_token()
         now = fields.Datetime.now()
+
+        existing_by_key = {(r.cod_plan, r.cod_cta): r for r in self.search([])}
 
         page = 1
         total = None
@@ -81,6 +93,8 @@ class FreematicaAccount(models.Model):
                         total = None
                 if not items:
                     break
+
+                to_create = []
                 for item in items:
                     cod_plan = item.get('COD_PLAN')
                     cod_cta = item.get('COD_CTA')
@@ -93,14 +107,23 @@ class FreematicaAccount(models.Model):
                         'des_cta2': item.get('DES_CTA2'),
                         'cta_activa': bool(item.get('CTA_ACTIVA')),
                         'subcuenta': bool(item.get('SUBCUENTA')),
-                        'last_synced_at': now,
                     }
-                    existing = self.search([('cod_plan', '=', cod_plan), ('cod_cta', '=', cod_cta)], limit=1)
+                    existing = existing_by_key.get((cod_plan, cod_cta))
                     if existing:
-                        existing.write(vals)
+                        changed = any(existing[field] != value for field, value in vals.items())
+                        if changed:
+                            existing.write(vals)
                     else:
-                        self.create(vals)
+                        to_create.append(dict(vals, last_synced_at=now))
                     count += 1
+
+                if to_create:
+                    created = self.create(to_create)
+                    for record in created:
+                        existing_by_key[(record.cod_plan, record.cod_cta)] = record
+
+                self.env.cr.commit()
+
                 if len(items) < _SYNC_PAGE_SIZE:
                     break
                 if total is not None and page * _SYNC_PAGE_SIZE >= total:
@@ -108,6 +131,7 @@ class FreematicaAccount(models.Model):
                 page += 1
         except client.FreematicaError as error:
             config.write({'accounts_last_sync_error': error.mensaje})
+            self.env.cr.commit()
             raise
 
         config.write({
@@ -115,5 +139,6 @@ class FreematicaAccount(models.Model):
             'accounts_last_sync_count': count,
             'accounts_last_sync_error': False,
         })
+        self.env.cr.commit()
         _logger.info('Freematica: %s cuentas contables sincronizadas', count)
         return count
