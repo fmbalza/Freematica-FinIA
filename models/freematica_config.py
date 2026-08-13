@@ -65,9 +65,12 @@ class FreematicaConfig(models.Model):
              'seguro, para no contabilizar en un diario equivocado.',
     )
     cuenta_proveedor_default = fields.Char(
-        string='Cuenta contable de Proveedores (BORRL_CTA)', required=True,
-        help='Cuenta genérica de proveedores (p.ej. "400000"); el proveedor concreto se '
-             'distingue por el código auxiliar (finia.ocr.vendor.freematica_cod_aux).',
+        string='Cuenta contable de Proveedores (BORRL_CTA) — respaldo', required=True,
+        help='Cuenta a usar SOLO si el proveedor de la factura no se pudo matchear contra '
+             'el catálogo de Freematica (freematica.provider.cta_contable). Confirmado '
+             '2026-08-13: la cuenta real varía por proveedor (algunos "40000000", otros '
+             '"41000000"), no es una cuenta única para todos — por eso esto es solo un '
+             'respaldo, no la fuente principal.',
     )
     cuenta_iva_soportado_default = fields.Char(
         string='Cuenta de IVA Soportado (BORRL_CTA)', required=True,
@@ -87,6 +90,13 @@ class FreematicaConfig(models.Model):
         help='Opcional. Se omite del payload si se deja en 0.',
     )
     concepto_asiento_default = fields.Char(string='Concepto de asiento (BORRL_CONASI)', default='FACT')
+    provider_match_threshold = fields.Float(
+        string='Umbral de coincidencia de proveedores', default=0.75,
+        help='Ratio de similitud (0-1) mínimo para aceptar automáticamente una coincidencia '
+             'de proveedor por nombre (mismo mecanismo que facturaweb.config.match_threshold). '
+             'Solo aplica al fuzzy-match por nombre; una coincidencia por NIF exacto siempre '
+             'se acepta.',
+    )
 
     # ── Formato de LINEAS/IVA/CARTERA (punto ambiguo del propio doc) ────
     lineas_as_json_string = fields.Boolean(
@@ -101,6 +111,11 @@ class FreematicaConfig(models.Model):
     last_test_at = fields.Datetime(string='Última prueba de conexión', readonly=True)
     last_test_ok = fields.Boolean(string='Última prueba OK', readonly=True)
     last_test_message = fields.Text(string='Resultado última prueba', readonly=True)
+
+    # ── Sincronización de proveedores (freematica.provider) ─────────────
+    providers_last_sync_at = fields.Datetime(string='Última sincronización de proveedores', readonly=True)
+    providers_last_sync_count = fields.Integer(string='Proveedores sincronizados', readonly=True)
+    providers_last_sync_error = fields.Text(string='Último error de sincronización', readonly=True)
 
     @api.model
     def get_active_config(self):
@@ -174,3 +189,20 @@ class FreematicaConfig(models.Model):
                 })
                 raise UserError(error.mensaje) from error
         return True
+
+    def action_sync_providers(self):
+        for record in self:
+            try:
+                self.env['freematica.provider'].sync_from_freematica(record)
+            except client.FreematicaError as error:
+                raise UserError(error.mensaje) from error
+        return True
+
+    @api.model
+    def _cron_sync_providers(self):
+        configs = self.search([('active', '=', True)])
+        for config in configs:
+            try:
+                self.env['freematica.provider'].sync_from_freematica(config)
+            except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
+                _logger.error('Freematica: fallo sincronizando proveedores (config %s): %s', config.id, error)

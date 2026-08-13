@@ -9,6 +9,12 @@
                 <group string="Freematica">
                     <field name="nif"/>
                     <field name="freematica_cod_aux"/>
+                    <field name="freematica_provider_id"/>
+                    <field name="freematica_match_state" widget="badge"
+                           decoration-success="freematica_match_state in ('coincidencia_nif', 'coincidencia_manual')"
+                           decoration-info="freematica_match_state == 'coincidencia_automatica'"
+                           decoration-danger="freematica_match_state == 'sin_coincidencia'"/>
+                    <field name="freematica_match_score"/>
                 </group>
             </xpath>
         </field>

@@ -5,4 +5,10 @@
               parent="finIA_backend.subscription_menu_configuration"
               action="freematica_config_action"
               sequence="50"/>
+
+    <menuitem id="freematica_menu_providers"
+              name="Proveedores Freematica"
+              parent="finIA_backend.subscription_menu_configuration"
+              action="freematica_provider_action"
+              sequence="51"/>
 </odoo>

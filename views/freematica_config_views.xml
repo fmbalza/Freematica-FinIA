@@ -23,6 +23,7 @@
                 <header>
                     <button name="action_test_connection" string="Probar conexión" type="object" class="btn-primary"/>
                     <button name="action_renew_token" string="Renovar token (login)" type="object"/>
+                    <button name="action_sync_providers" string="Sincronizar proveedores" type="object"/>
                 </header>
                 <sheet>
                     <group>
@@ -52,12 +53,20 @@
                             <field name="serie_contable_default"/>
                             <field name="grupo_aux_proveedor"/>
                             <field name="concepto_asiento_default"/>
+                            <field name="provider_match_threshold"/>
                             <field name="lineas_as_json_string"/>
                         </group>
                         <group string="Última prueba de conexión">
                             <field name="last_test_at" readonly="1"/>
                             <field name="last_test_ok" readonly="1"/>
                             <field name="last_test_message" readonly="1" widget="text"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Sincronización de proveedores">
+                            <field name="providers_last_sync_at" readonly="1"/>
+                            <field name="providers_last_sync_count" readonly="1"/>
+                            <field name="providers_last_sync_error" readonly="1" widget="text"/>
                         </group>
                     </group>
                 </sheet>

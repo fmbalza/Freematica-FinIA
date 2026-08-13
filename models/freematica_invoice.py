@@ -41,10 +41,14 @@ class FiniaInvoice(models.Model):
             ) % ', '.join(missing))
 
         vendor = self.ocr_vendor_id
+        if vendor.freematica_match_state == 'no_intentado':
+            vendor._freematica_resolve_provider()
         if not vendor.freematica_cod_aux:
             raise UserError(_(
                 'El proveedor "%s" no tiene configurado su código auxiliar de Freematica '
-                '(finia.ocr.vendor.freematica_cod_aux). Configúralo antes de enviar.'
+                '(finia.ocr.vendor.freematica_cod_aux), y no se encontró automáticamente en '
+                'el catálogo sincronizado (freematica.provider). Sincroniza proveedores desde '
+                'FinIA - Freematica > Configuración, o complétalo a mano.'
             ) % vendor.name)
 
         missing_accounts = self.line_ids.filtered(lambda l: not l.accounting_account)
@@ -83,9 +87,12 @@ class FiniaInvoice(models.Model):
 
         lineas = []
 
-        # Línea Haber: proveedor (contrapartida, por el importe total de la factura)
+        # Línea Haber: proveedor (contrapartida, por el importe total de la factura).
+        # Cuenta real del proveedor en Freematica (varía por proveedor, confirmado
+        # 2026-08-13) si está matcheado; si no, la cuenta de respaldo de la config.
+        cuenta_proveedor = vendor.freematica_provider_id.cta_contable or config.cuenta_proveedor_default
         proveedor_linea = {
-            'BORRL_CTA': config.cuenta_proveedor_default,
+            'BORRL_CTA': cuenta_proveedor,
             'BORRL_CODAUX': vendor.freematica_cod_aux,
             'BORRL_CONASI': config.concepto_asiento_default or 'FACT',
             'BORRL_DESCON': descripcion_base,

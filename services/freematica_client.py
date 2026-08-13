@@ -25,6 +25,7 @@ _logger = logging.getLogger(__name__)
 LOGIN_PATH = '/ppre/v2/control/entrada'
 IMPORT_ASIENTOS_PATH = '/pcon/v2/import-asientos'
 EXPORT_ASIENTOS_PATH = '/pcon/v2/export-asientos'
+PROVEEDORES_PATH = '/pgrl/v2/proveedores'
 
 # Claves, dentro de una línea de asiento, que representan listas de objetos y
 # que deben serializarse también si `lineas_as_json_string` está activo.
@@ -169,6 +170,21 @@ def export_asientos(config, empresa, cal, periodo=None, rquery=None, page=None, 
     if items is not None:
         params['items'] = items
     return _request(config, 'GET', EXPORT_ASIENTOS_PATH, 'export-asientos', params=params, token=token)
+
+
+def list_proveedores(config, page=None, items=None, rquery=None, token=None):
+    """GET /pgrl/v2/proveedores — catálogo de proveedores (tabla
+    CM_PROVEEDORES), con CTA_CONTABLE real por proveedor. Confirmado que
+    existe (2026-08-13) al contrario de lo que suponía el documento original
+    de Asientos (que asumía que Freematica no exponía este catálogo)."""
+    params = {}
+    if page is not None:
+        params['page'] = page
+    if items is not None:
+        params['items'] = items
+    if rquery:
+        params['rQuery'] = rquery
+    return _request(config, 'GET', PROVEEDORES_PATH, 'proveedores', params=params, token=token)
 
 
 def test_connection(config, token=None):
