@@ -9,6 +9,10 @@
                 <button name="action_freematica_check" string="Verificar Freematica" type="object"
                         title="Corre todas las validaciones sin llamar a la API — audita antes de gastar un intento real"/>
             </xpath>
+            <xpath expr="//field[@name='line_ids']//field[@name='total_amount']" position="after">
+                <field name="expense_category_id" optional="show"/>
+                <field name="accounting_account" optional="show"/>
+            </xpath>
             <xpath expr="//page[@name='logs']" position="before">
                 <page string="Freematica" name="freematica">
                     <group>
