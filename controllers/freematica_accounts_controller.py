@@ -121,17 +121,22 @@ class FreematicaAccountsController(http.Controller):
                 methods=['POST'], csrf=False)
     def assign_accounting_account(self, invoice_id, **kwargs):
         """POST /api/v1/invoices/<id>/assign-accounting-account
-        Body: {"accounting_account": "62900000", "apply_to_vendor_default": true}
-        Escribe la cuenta en TODAS las líneas de la factura; si
-        apply_to_vendor_default, también en el proveedor OCR (sobreescribe
-        a propósito: es una elección explícita confirmada en el frontend).
-        No envía a Freematica — eso sigue siendo un paso aparte."""
-        body = _read_json_body()
-        accounting_account = (body.get('accounting_account') or '').strip()
-        apply_to_vendor_default = bool(body.get('apply_to_vendor_default'))
 
-        if not accounting_account:
-            return json_response({'success': False, 'error': 'accounting_account is required'}, 200)
+        Dos modos, según lo que traiga el body:
+
+        - Toda la factura: {"accounting_account": "62900000", "apply_to_vendor_default": true}
+          Escribe esa cuenta en TODAS las líneas; si apply_to_vendor_default,
+          también en el proveedor OCR (sobreescribe a propósito: es una
+          elección explícita confirmada en el frontend).
+        - Por línea: {"line_accounts": [{"line_id": 123, "accounting_account": "62900000"}, ...]}
+          Escribe cada línea con su propia cuenta; sin default de proveedor
+          (no tiene sentido cuando las cuentas difieren por línea).
+
+        En ambos casos valida cada código contra el catálogo real
+        (freematica.account) antes de guardar nada. No envía a Freematica —
+        eso sigue siendo un paso aparte."""
+        body = _read_json_body()
+        line_accounts = body.get('line_accounts')
 
         try:
             Invoice = request.env['finia.invoice'].sudo()
@@ -139,15 +144,51 @@ class FreematicaAccountsController(http.Controller):
             if not invoice.exists():
                 return json_response({'success': False, 'error': 'Invoice not found'}, 200)
 
-            valid_account = request.env['freematica.account'].sudo().search([
-                ('cod_cta', '=', accounting_account), ('cta_activa', '=', True), ('subcuenta', '=', True),
-            ], limit=1)
-            if not valid_account:
+            Account = request.env['freematica.account'].sudo()
+
+            def _validate_account(code):
+                valid = Account.search([
+                    ('cod_cta', '=', code), ('cta_activa', '=', True), ('subcuenta', '=', True),
+                ], limit=1)
+                if not valid:
+                    raise ValueError(
+                        'La cuenta "%s" no existe en el plan de cuentas de Freematica (o no es una '
+                        'cuenta activa/imputable). Sincroniza cuentas si acaba de crearse.' % code
+                    )
+
+            if line_accounts:
+                line_ids = [int(entry.get('line_id')) for entry in line_accounts if entry.get('line_id')]
+                lines_by_id = {line.id: line for line in invoice.line_ids.filtered(lambda l: l.id in line_ids)}
+                for entry in line_accounts:
+                    line_id = entry.get('line_id')
+                    code = (entry.get('accounting_account') or '').strip()
+                    if not line_id or not code:
+                        continue
+                    if int(line_id) not in lines_by_id:
+                        return json_response({
+                            'success': False,
+                            'error': 'La línea %s no pertenece a la factura %s.' % (line_id, invoice_id),
+                        }, 200)
+                    _validate_account(code)
+
+                for entry in line_accounts:
+                    line_id = entry.get('line_id')
+                    code = (entry.get('accounting_account') or '').strip()
+                    if not line_id or not code:
+                        continue
+                    lines_by_id[int(line_id)].write({'accounting_account': code})
+
                 return json_response({
-                    'success': False,
-                    'error': 'La cuenta "%s" no existe en el plan de cuentas de Freematica (o no es una '
-                             'cuenta activa/imputable). Sincroniza cuentas si acaba de crearse.' % accounting_account,
-                }, 200)
+                    'success': True,
+                    'data': {'invoice_id': invoice.id, 'mode': 'lines', 'line_accounts': line_accounts},
+                })
+
+            accounting_account = (body.get('accounting_account') or '').strip()
+            apply_to_vendor_default = bool(body.get('apply_to_vendor_default'))
+            if not accounting_account:
+                return json_response({'success': False, 'error': 'accounting_account is required'}, 200)
+
+            _validate_account(accounting_account)
 
             invoice.line_ids.write({'accounting_account': accounting_account})
             if apply_to_vendor_default and invoice.ocr_vendor_id:
@@ -157,10 +198,13 @@ class FreematicaAccountsController(http.Controller):
                 'success': True,
                 'data': {
                     'invoice_id': invoice.id,
+                    'mode': 'invoice',
                     'accounting_account': accounting_account,
                     'applied_to_vendor_default': apply_to_vendor_default,
                 },
             })
+        except ValueError as error:
+            return json_response({'success': False, 'error': str(error)}, 200)
         except Exception as error:
             _logger.error('Freematica assign-accounting-account error for invoice %s: %s', invoice_id, error)
             return json_response({'success': False, 'error': str(error)}, 200)

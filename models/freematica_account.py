@@ -60,11 +60,13 @@ class FreematicaAccount(models.Model):
     def search_for_picker(self, query, limit=20):
         """Búsqueda para el selector de cuenta en el frontend: solo cuentas
         activas e imputables (subcuenta=True), por código o por descripción
-        (normalizada, sin acentos/mayúsculas)."""
+        (normalizada, sin acentos/mayúsculas). Sin texto de búsqueda,
+        devuelve las primeras `limit` cuentas (orden por código) en vez de
+        nada — para poder "navegar" el catálogo antes de escribir."""
         query = (query or '').strip()
-        if not query:
-            return self.browse()
         domain = [('cta_activa', '=', True), ('subcuenta', '=', True)]
+        if not query:
+            return self.search(domain, limit=limit, order='cod_cta')
         normalized_query = matching.normalize_name(query)
         domain += ['|', ('cod_cta', 'like', query), ('normalized_des', 'ilike', normalized_query)]
         return self.search(domain, limit=limit)
