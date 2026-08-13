@@ -11,4 +11,10 @@
               parent="finIA_backend.subscription_menu_configuration"
               action="freematica_provider_action"
               sequence="51"/>
+
+    <menuitem id="freematica_menu_accounts"
+              name="Plan de Cuentas Freematica"
+              parent="finIA_backend.subscription_menu_configuration"
+              action="freematica_account_action"
+              sequence="52"/>
 </odoo>

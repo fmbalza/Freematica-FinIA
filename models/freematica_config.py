@@ -117,6 +117,11 @@ class FreematicaConfig(models.Model):
     providers_last_sync_count = fields.Integer(string='Proveedores sincronizados', readonly=True)
     providers_last_sync_error = fields.Text(string='Último error de sincronización', readonly=True)
 
+    # ── Sincronización del plan de cuentas (freematica.account) ─────────
+    accounts_last_sync_at = fields.Datetime(string='Última sincronización de cuentas', readonly=True)
+    accounts_last_sync_count = fields.Integer(string='Cuentas sincronizadas', readonly=True)
+    accounts_last_sync_error = fields.Text(string='Último error de sincronización (cuentas)', readonly=True)
+
     @api.model
     def get_active_config(self):
         config = self.search([('active', '=', True)], limit=1)
@@ -206,3 +211,20 @@ class FreematicaConfig(models.Model):
                 self.env['freematica.provider'].sync_from_freematica(config)
             except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
                 _logger.error('Freematica: fallo sincronizando proveedores (config %s): %s', config.id, error)
+
+    def action_sync_accounts(self):
+        for record in self:
+            try:
+                self.env['freematica.account'].sync_from_freematica(record)
+            except client.FreematicaError as error:
+                raise UserError(error.mensaje) from error
+        return True
+
+    @api.model
+    def _cron_sync_accounts(self):
+        configs = self.search([('active', '=', True)])
+        for config in configs:
+            try:
+                self.env['freematica.account'].sync_from_freematica(config)
+            except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
+                _logger.error('Freematica: fallo sincronizando cuentas (config %s): %s', config.id, error)

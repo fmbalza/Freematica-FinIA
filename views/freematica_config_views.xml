@@ -24,6 +24,7 @@
                     <button name="action_test_connection" string="Probar conexión" type="object" class="btn-primary"/>
                     <button name="action_renew_token" string="Renovar token (login)" type="object"/>
                     <button name="action_sync_providers" string="Sincronizar proveedores" type="object"/>
+                    <button name="action_sync_accounts" string="Sincronizar cuentas" type="object"/>
                 </header>
                 <sheet>
                     <group>
@@ -67,6 +68,11 @@
                             <field name="providers_last_sync_at" readonly="1"/>
                             <field name="providers_last_sync_count" readonly="1"/>
                             <field name="providers_last_sync_error" readonly="1" widget="text"/>
+                        </group>
+                        <group string="Sincronización del plan de cuentas">
+                            <field name="accounts_last_sync_at" readonly="1"/>
+                            <field name="accounts_last_sync_count" readonly="1"/>
+                            <field name="accounts_last_sync_error" readonly="1" widget="text"/>
                         </group>
                     </group>
                 </sheet>

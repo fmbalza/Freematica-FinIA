@@ -26,6 +26,7 @@ LOGIN_PATH = '/ppre/v2/control/entrada'
 IMPORT_ASIENTOS_PATH = '/pcon/v2/import-asientos'
 EXPORT_ASIENTOS_PATH = '/pcon/v2/export-asientos'
 PROVEEDORES_PATH = '/pgrl/v2/proveedores'
+CUENTAS_PATH = '/pcon/v2/cuentas'
 
 # Claves, dentro de una línea de asiento, que representan listas de objetos y
 # que deben serializarse también si `lineas_as_json_string` está activo.
@@ -185,6 +186,21 @@ def list_proveedores(config, page=None, items=None, rquery=None, token=None):
     if rquery:
         params['rQuery'] = rquery
     return _request(config, 'GET', PROVEEDORES_PATH, 'proveedores', params=params, token=token)
+
+
+def list_cuentas(config, page=None, items=None, rquery=None, token=None):
+    """GET /pcon/v2/cuentas — plan de cuentas real (confirmado 2026-08-13:
+    5470 cuentas en Servinet, dos planes PGCD/PGCS). A diferencia de
+    /pgrl/v2/proveedores, este endpoint rechaza con HTTP 400 si `items` >
+    100 ("Valor máximo permitido 100") — el caller debe paginar."""
+    params = {}
+    if page is not None:
+        params['page'] = page
+    if items is not None:
+        params['items'] = items
+    if rquery:
+        params['rQuery'] = rquery
+    return _request(config, 'GET', CUENTAS_PATH, 'cuentas', params=params, token=token)
 
 
 def test_connection(config, token=None):

@@ -1,3 +1,4 @@
 id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
 access_freematica_config_all,freematica.config.all,model_freematica_config,,1,1,1,1
 access_freematica_provider_all,freematica.provider.all,model_freematica_provider,,1,1,1,1
+access_freematica_account_all,freematica.account.all,model_freematica_account,,1,1,1,1

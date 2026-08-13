@@ -1,6 +1,6 @@
 {
     'name': 'FinIA - Freematica',
-    'version': '18.0.1.1.0',
+    'version': '18.0.1.2.0',
     'category': 'Accounting',
     'summary': 'Integración con Freematica (e-Satellite): envío de facturas como asientos contables',
     'description': """
@@ -17,6 +17,11 @@
         Finia por NIF o por nombre, para resolver su código auxiliar y su
         cuenta contable real (varía por proveedor) sin mapeo manual.
 
+        También sincroniza el plan de cuentas real (`pcon/v2/cuentas`) y
+        expone endpoints para asignar manualmente la cuenta de gasto de una
+        factura (o de varias a la vez) cuando no se pudo resolver sola,
+        validando contra ese catálogo en vez de aceptar cualquier texto.
+
         Sobreescribe el placeholder de finIA_backend
         (`finia.invoice.action_send_to_freematica` y el endpoint
         `/api/v1/invoices/<id>/send-to-freematica`) con la implementación real,
@@ -31,6 +36,7 @@
         'data/ir_cron.xml',
         'views/freematica_config_views.xml',
         'views/freematica_provider_views.xml',
+        'views/freematica_account_views.xml',
         'views/finia_invoice_views.xml',
         'views/finia_ocr_vendor_views.xml',
         'views/menu.xml',

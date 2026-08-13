@@ -12,13 +12,15 @@ class FiniaInvoice(models.Model):
     _name = 'finia.invoice'
     _inherit = ['finia.invoice', 'freematica.sendable.mixin']
 
-    def _freematica_validate_before_send(self):
-        """Junta TODOS los problemas encontrados en un solo UserError, en
-        vez de fallar con el primero — evita el ciclo de "corrijo uno,
-        reintento, aparece el siguiente" y deja ver de una vez todo lo que
-        falta antes de intentar el envío real."""
+    def _freematica_check_before_send(self):
+        """Junta TODOS los problemas encontrados (en vez de fallar con el
+        primero — evita el ciclo de "corrijo uno, reintento, aparece el
+        siguiente") y devuelve `(problems, problem_codes)`: la lista humana
+        y la lista paralela de códigos máquina, para que el frontend sepa
+        exactamente qué modal/acción mostrar sin parsear texto."""
         self.ensure_one()
         problems = []
+        problem_codes = []
 
         if self.state != 'contabilizado':
             problems.append(
@@ -26,20 +28,27 @@ class FiniaInvoice(models.Model):
                 'referencia y demás datos contables se fijan en ese paso); está en "%s"'
                 % dict(self._fields['state'].selection).get(self.state, self.state)
             )
+            problem_codes.append('not_contabilizado')
         if not (self.ocr_invoice_number or self.name):
             problems.append('falta el número de factura')
+            problem_codes.append('missing_invoice_number')
         if not self.ocr_invoice_date:
             problems.append('falta la fecha de factura')
+            problem_codes.append('missing_invoice_date')
         if not self.accounting_date:
             problems.append('falta la fecha contable')
+            problem_codes.append('missing_accounting_date')
         if not self.line_ids:
             problems.append('la factura no tiene líneas')
+            problem_codes.append('no_lines')
         if not self.ocr_total_amount:
             problems.append('falta el importe total')
+            problem_codes.append('missing_total_amount')
 
         vendor = self.ocr_vendor_id
         if not vendor:
             problems.append('falta el proveedor (OCR)')
+            problem_codes.append('missing_vendor')
         else:
             if vendor.freematica_match_state == 'no_intentado':
                 vendor._freematica_resolve_provider()
@@ -49,6 +58,7 @@ class FiniaInvoice(models.Model):
                     'automática (sincroniza proveedores desde FinIA - Freematica > '
                     'Configuración) ni completado a mano' % vendor.name
                 )
+                problem_codes.append('vendor_not_matched')
 
         if self.line_ids:
             missing_accounts = self.line_ids.filtered(lambda l: not l.accounting_account)
@@ -60,11 +70,9 @@ class FiniaInvoice(models.Model):
                     'defecto del proveedor en finia.ocr.vendor.default_accounting_account'
                     % (len(missing_accounts), names[:300])
                 )
+                problem_codes.append('missing_accounting_account')
 
-        if problems:
-            raise UserError(_(
-                'No se puede enviar "%s" a Freematica — %d problema(s) encontrado(s):\n- %s'
-            ) % (self.display_name, len(problems), '\n- '.join(problems)))
+        return problems, problem_codes
 
     def action_freematica_check(self):
         """Corre la misma validación que se ejecuta antes de enviar, pero

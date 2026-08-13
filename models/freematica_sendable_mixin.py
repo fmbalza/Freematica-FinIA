@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from odoo import fields, models
+from odoo import _, fields, models
 from odoo.exceptions import UserError
 
 from ..services import freematica_client as client
@@ -24,9 +24,24 @@ class FreematicaSendableMixin(models.AbstractModel):
     freematica_error = fields.Text(string='Último error Freematica', readonly=True)
     freematica_borr_cod = fields.Char(string='Código de asiento (BORR_COD)', readonly=True, copy=False)
 
-    def _freematica_validate_before_send(self):
-        """A implementar por cada modelo concreto."""
+    def _freematica_check_before_send(self):
+        """A implementar por cada modelo concreto. Debe devolver
+        `(problems, problem_codes)`: `problems` una lista de strings en
+        español para mostrar al usuario, `problem_codes` la lista paralela
+        de códigos máquina (ej. 'missing_accounting_account') para que un
+        caller (como el frontend) pueda reaccionar sin parsear texto."""
         raise NotImplementedError
+
+    def _freematica_validate_before_send(self):
+        """Envoltorio sobre `_freematica_check_before_send` que lanza
+        UserError si hay problemas — lo usa `action_freematica_check` para
+        la auditoría manual sin llamar a la API."""
+        self.ensure_one()
+        problems, _codes = self._freematica_check_before_send()
+        if problems:
+            raise UserError(_(
+                'No se puede enviar "%s" a Freematica — %d problema(s) encontrado(s):\n- %s'
+            ) % (self.display_name, len(problems), '\n- '.join(problems)))
 
     def _freematica_build_asiento_payload(self, config):
         """A implementar por cada modelo concreto. Debe devolver el dict
@@ -51,13 +66,14 @@ class FreematicaSendableMixin(models.AbstractModel):
         nunca lanza, para que un fallo no tumbe el resto de un envío
         múltiple."""
         self.ensure_one()
-        try:
-            self._freematica_validate_before_send()
-        except UserError as error:
-            message = str(error)
+        problems, problem_codes = self._freematica_check_before_send()
+        if problems:
+            message = _(
+                'No se puede enviar "%s" a Freematica — %d problema(s) encontrado(s):\n- %s'
+            ) % (self.display_name, len(problems), '\n- '.join(problems))
             self.write({'freematica_state': 'error', 'freematica_error': message})
             self._freematica_log('freematica_error', message)
-            return {'success': False, 'error': message}
+            return {'success': False, 'error': message, 'error_codes': problem_codes}
 
         try:
             config = self.env['freematica.config'].get_active_config()
@@ -65,7 +81,7 @@ class FreematicaSendableMixin(models.AbstractModel):
             message = str(error)
             self.write({'freematica_state': 'error', 'freematica_error': message})
             self._freematica_log('freematica_error', message)
-            return {'success': False, 'error': message}
+            return {'success': False, 'error': message, 'error_codes': ['no_active_config']}
 
         self.write({'freematica_state': 'enviando'})
         try:
@@ -77,12 +93,12 @@ class FreematicaSendableMixin(models.AbstractModel):
             message = getattr(error, 'mensaje', None) or str(error)
             self.write({'freematica_state': 'error', 'freematica_error': message})
             self._freematica_log('freematica_error', message)
-            return {'success': False, 'error': message}
+            return {'success': False, 'error': message, 'error_codes': ['api_error']}
         except Exception as error:  # noqa: BLE001 - un fallo no debe bloquear el resto del lote
             message = str(error)
             self.write({'freematica_state': 'error', 'freematica_error': message})
             self._freematica_log('freematica_error', message)
-            return {'success': False, 'error': message}
+            return {'success': False, 'error': message, 'error_codes': ['unexpected_error']}
 
         borr_cod = (response.get('BORR_COD') if isinstance(response, dict) else None) or payload.get('BORR_COD')
         self.write({

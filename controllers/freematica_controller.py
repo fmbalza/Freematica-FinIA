@@ -47,6 +47,7 @@ class InvoiceController(_BaseInvoiceController):
                     'invoice_id': invoice.id,
                     'freematica_state': invoice.freematica_state,
                     'freematica_borr_cod': invoice.freematica_borr_cod,
+                    'error_codes': result.get('error_codes') or [],
                 },
             }, 200 if result.get('success') else 400)
         except Exception as e:  # noqa: BLE001 - responder JSON en vez de tumbar el request
