@@ -34,6 +34,14 @@ class FiniaOcrVendor(models.Model):
         ('sin_coincidencia', 'Sin coincidencia'),
     ], string='Estado coincidencia Freematica', default='no_intentado', copy=False)
     freematica_matched_at = fields.Datetime(string='Última resolución Freematica', readonly=True)
+    freematica_has_irpf = fields.Boolean(
+        string='Facturas con IRPF',
+        help='Marcar si este proveedor es un profesional/autónomo sujeto a retención de '
+             'IRPF (aplica a todas sus facturas, no varía factura a factura). Determina qué '
+             'plantilla (BORR_PLANT) se usa al enviar sus facturas a Freematica: '
+             'freematica.config.plantilla_irpf en vez de plantilla_normal. Finia no calcula '
+             'ni extrae el importe de la retención hoy — esto solo decide la plantilla.',
+    )
 
     def _freematica_resolve_provider(self, force=False):
         """Intenta matchear este proveedor Finia contra el catálogo cacheado

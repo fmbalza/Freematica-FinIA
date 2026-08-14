@@ -54,6 +54,8 @@
                             <field name="serie_contable_default"/>
                             <field name="grupo_aux_proveedor"/>
                             <field name="concepto_asiento_default"/>
+                            <field name="plantilla_normal"/>
+                            <field name="plantilla_irpf"/>
                             <field name="provider_match_threshold"/>
                             <field name="lineas_as_json_string"/>
                         </group>

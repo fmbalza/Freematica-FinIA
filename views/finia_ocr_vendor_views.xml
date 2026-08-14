@@ -10,6 +10,7 @@
                     <field name="nif"/>
                     <field name="freematica_cod_aux"/>
                     <field name="default_accounting_account"/>
+                    <field name="freematica_has_irpf"/>
                     <field name="freematica_provider_id"/>
                     <field name="freematica_match_state" widget="badge"
                            decoration-success="freematica_match_state in ('coincidencia_nif', 'coincidencia_manual')"
@@ -29,6 +30,7 @@
             <xpath expr="//field[@name='document_count']" position="before">
                 <field name="freematica_cod_aux"/>
                 <field name="default_accounting_account" optional="show"/>
+                <field name="freematica_has_irpf" optional="show" widget="boolean_toggle"/>
             </xpath>
         </field>
     </record>

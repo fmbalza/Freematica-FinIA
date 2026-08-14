@@ -226,10 +226,11 @@ class FiniaInvoice(models.Model):
                 'Freematica. Revisa las cuentas/importes de la factura "%s".'
             ) % (total_debe, total_haber, self.display_name))
 
+        plantilla = config.plantilla_irpf if vendor.freematica_has_irpf else config.plantilla_normal
         return {
             'BORR_CODEMP': config.x_auth_company,
             'BORR_COD': ('INV%07d' % self.id)[:10],
-            'BORR_PLANT': '',
+            'BORR_PLANT': plantilla or '',
             'BORR_FCHASI': fecha_asiento,
             'BORR_CALEN': str(accounting_date.year),
             'BORR_PER': accounting_date.month,

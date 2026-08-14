@@ -90,6 +90,17 @@ class FreematicaConfig(models.Model):
         help='Opcional. Se omite del payload si se deja en 0.',
     )
     concepto_asiento_default = fields.Char(string='Concepto de asiento (BORRL_CONASI)', default='FACT')
+    plantilla_normal = fields.Char(
+        string='Plantilla — factura normal (BORR_PLANT)', default='30',
+        help='Confirmado con Servinet (2026-08-14): "30 - Factura Proveedor ICA" para '
+             'facturas normales (sin IRPF). Se usa salvo que el proveedor tenga marcado '
+             '"Facturas con IRPF" en su ficha.',
+    )
+    plantilla_irpf = fields.Char(
+        string='Plantilla — factura con IRPF (BORR_PLANT)', default='32',
+        help='Confirmado con Servinet (2026-08-14): "32 - Factura Proveedor ICA+IRPF" para '
+             'facturas de proveedores marcados como sujetos a retención de IRPF.',
+    )
     provider_match_threshold = fields.Float(
         string='Umbral de coincidencia de proveedores', default=0.75,
         help='Ratio de similitud (0-1) mínimo para aceptar automáticamente una coincidencia '
