@@ -62,14 +62,29 @@ def _raise_if_business_error(data, operation):
     if not isinstance(data, dict):
         return
     error_code = data.get('errorCode')
-    if error_code is None:
-        return
-    if str(error_code) not in _ENVELOPE_SUCCESS_CODES:
+    if error_code is not None and str(error_code) not in _ENVELOPE_SUCCESS_CODES:
         raise FreematicaError(
             'Freematica rechazó %s (errorCode %s): %s' % (
                 operation, error_code, data.get('errorMessage') or '(sin mensaje)',
             ),
             operation, status_code=error_code,
+        )
+    # Segundo patrón, más traicionero, confirmado 2026-09-09 contra un
+    # import-asientos real: Freematica puede devolver `errorCode: "200"`
+    # (¡el propio código de éxito!) con `errorMessage: "Información del
+    # proceso"` y el mensaje de rechazo real metido como STRING dentro de
+    # `data` en vez de como objeto del asiento — ej. `data:
+    # "[[VALIDACION] El Código de IVA manual [21] no existe.]...[VALIDACION
+    # ABORTADA] 2 errores. HTTP 400."`. Un éxito genuino de cualquier
+    # endpoint (export-asientos, proveedores, cuentas, import-asientos)
+    # siempre trae `data` como objeto (eco del asiento o {items,total}),
+    # nunca como texto plano — así que un `data` string, sea lo que sea que
+    # diga `errorCode`, es en sí mismo la señal de fallo.
+    inner_data = data.get('data')
+    if isinstance(inner_data, str) and inner_data.strip():
+        raise FreematicaError(
+            'Freematica rechazó %s: %s' % (operation, inner_data),
+            operation, status_code=data.get('errorCode'),
         )
 
 
