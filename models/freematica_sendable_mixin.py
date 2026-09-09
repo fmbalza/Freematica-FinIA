@@ -118,18 +118,27 @@ class FreematicaSendableMixin(models.AbstractModel):
             self._freematica_log('freematica_error', message)
             return {'success': False, 'error': message, 'error_codes': ['unexpected_error']}
 
-        # La API envuelve la respuesta real en {errorCode, errorMessage, data}
-        # (confirmado 2026-09-09, ver freematica_client._raise_if_business_error
-        # — antes de este fix, un rechazo de negocio con HTTP 200 llegaba
-        # hasta aquí como si fuera éxito). Con el envelope ya validado por
-        # `import_asientos` (lanza si errorCode no es de éxito), lo que quede
-        # en `data` es el eco real del asiento devuelto por Freematica.
+        # `import_asientos` ya descarta los dos patrones de rechazo conocidos
+        # (errorCode de fallo, y errorCode=200 con `data` como string de
+        # error — confirmado 2026-09-09 contra un rechazo real). Pero eso es
+        # detección NEGATIVA (rechazamos lo que reconocemos como error) — acá
+        # exigimos PRUEBA POSITIVA de éxito: solo se marca "enviado" si
+        # `data` es el objeto/eco real del asiento. Cualquier otra forma
+        # (vacío, string, ausente — ej. un body vacío con HTTP 200, que
+        # `_request` de por sí no rechaza) se trata como NO confirmado, nunca
+        # como éxito por defecto. "Documentos no se marcan como enviados si
+        # dan error, solo si son correctos" — no hay término medio.
         response_data = response.get('data') if isinstance(response, dict) else None
-        borr_cod = (
-            (response_data.get('BORR_COD') if isinstance(response_data, dict) else None)
-            or (response.get('BORR_COD') if isinstance(response, dict) else None)
-            or payload.get('BORR_COD')
-        )
+        if not isinstance(response_data, dict):
+            message = (
+                'Freematica no confirmó el envío de "%s": la respuesta no trae el eco '
+                'del asiento (recibido: %r). No se marca como enviada hasta poder '
+                'confirmarlo.' % (self.display_name, response_data)
+            )
+            self.write({'freematica_state': 'error', 'freematica_error': message})
+            self._freematica_log('freematica_error', message)
+            return {'success': False, 'error': message, 'error_codes': ['unconfirmed_response']}
+        borr_cod = response_data.get('BORR_COD') or payload.get('BORR_COD')
         self.write({
             'freematica_state': 'enviado',
             'freematica_sent_at': fields.Datetime.now(),
