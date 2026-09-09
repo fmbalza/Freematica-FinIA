@@ -1,8 +1,13 @@
 # -*- coding: utf-8 -*-
+import json
+import logging
+
 from odoo import _, fields, models
 from odoo.exceptions import UserError
 
 from ..services import freematica_client as client
+
+_logger = logging.getLogger(__name__)
 
 
 class FreematicaSendableMixin(models.AbstractModel):
@@ -88,7 +93,20 @@ class FreematicaSendableMixin(models.AbstractModel):
             token = config._ensure_valid_token()
             payload = self._freematica_build_asiento_payload(config)
             client_config = config._as_client_config()
+            # Diagnóstico 2026-09-09: cliente reportó que "Plantilla" (BORR_PLANT)
+            # llegó vacía en un envío real pese a que el payload lo arma con
+            # config.plantilla_normal/irpf — logueamos payload y respuesta cruda
+            # para poder comparar qué se mandó vs. qué devuelve Freematica, en
+            # vez de seguir especulando sin evidencia.
+            _logger.info(
+                'Freematica: payload de envío para %s: %s',
+                self.display_name, json.dumps(payload, ensure_ascii=False, default=str),
+            )
             response = client.import_asientos(client_config, payload, token=token)
+            _logger.info(
+                'Freematica: respuesta cruda para %s: %s',
+                self.display_name, json.dumps(response, ensure_ascii=False, default=str),
+            )
         except (client.FreematicaError, UserError) as error:
             message = getattr(error, 'mensaje', None) or str(error)
             self.write({'freematica_state': 'error', 'freematica_error': message})
