@@ -41,6 +41,38 @@ class FreematicaError(Exception):
         super().__init__(mensaje)
 
 
+# Códigos que la propia API usa dentro del body para indicar éxito.
+# Confirmado 2026-09-09 contra el entorno real de Servinet: la API responde
+# SIEMPRE con HTTP 200, incluso cuando rechaza la operación por un motivo de
+# negocio — un header inválido dio HTTP 200 con
+# `{"errorCode":"100012","errorMessage":"Header X-AUTH-APP no válido"}`, y un
+# export-asientos real (200 OK genuino) trae `{"errorCode":"200",
+# "errorMessage":""}`. El status HTTP por sí solo NO basta para saber si la
+# llamada tuvo éxito — hay que mirar también `errorCode`/`errorMessage` del
+# body. Antes de este fix, `_request` solo miraba el status HTTP: dos
+# facturas (ids 23 y 59 en servinet-pro) quedaron marcadas `freematica_state
+# = enviado` con un `BORR_COD` que en realidad era el que Finia había
+# generado y enviado como parte del payload -no uno devuelto por
+# Freematica-, y no existe ningún asiento con esa referencia en
+# export-asientos: el envío nunca se confirmó de verdad.
+_ENVELOPE_SUCCESS_CODES = ('200', '201')
+
+
+def _raise_if_business_error(data, operation):
+    if not isinstance(data, dict):
+        return
+    error_code = data.get('errorCode')
+    if error_code is None:
+        return
+    if str(error_code) not in _ENVELOPE_SUCCESS_CODES:
+        raise FreematicaError(
+            'Freematica rechazó %s (errorCode %s): %s' % (
+                operation, error_code, data.get('errorMessage') or '(sin mensaje)',
+            ),
+            operation, status_code=error_code,
+        )
+
+
 def _base_url(config):
     host = (config.get('host') or '').rstrip('/')
     if not host:
@@ -100,11 +132,13 @@ def _request(config, method, path, operation, params=None, json_body=None, token
     if not response.text:
         return {}
     try:
-        return response.json()
+        data = response.json()
     except ValueError as error:
         raise FreematicaError(
             'Respuesta inválida (no-JSON) de Freematica en %s: %s' % (operation, error), operation,
         ) from error
+    _raise_if_business_error(data, operation)
+    return data
 
 
 def login(config):

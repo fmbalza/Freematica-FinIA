@@ -100,7 +100,18 @@ class FreematicaSendableMixin(models.AbstractModel):
             self._freematica_log('freematica_error', message)
             return {'success': False, 'error': message, 'error_codes': ['unexpected_error']}
 
-        borr_cod = (response.get('BORR_COD') if isinstance(response, dict) else None) or payload.get('BORR_COD')
+        # La API envuelve la respuesta real en {errorCode, errorMessage, data}
+        # (confirmado 2026-09-09, ver freematica_client._raise_if_business_error
+        # — antes de este fix, un rechazo de negocio con HTTP 200 llegaba
+        # hasta aquí como si fuera éxito). Con el envelope ya validado por
+        # `import_asientos` (lanza si errorCode no es de éxito), lo que quede
+        # en `data` es el eco real del asiento devuelto por Freematica.
+        response_data = response.get('data') if isinstance(response, dict) else None
+        borr_cod = (
+            (response_data.get('BORR_COD') if isinstance(response_data, dict) else None)
+            or (response.get('BORR_COD') if isinstance(response, dict) else None)
+            or payload.get('BORR_COD')
+        )
         self.write({
             'freematica_state': 'enviado',
             'freematica_sent_at': fields.Datetime.now(),
@@ -108,4 +119,11 @@ class FreematicaSendableMixin(models.AbstractModel):
             'freematica_borr_cod': borr_cod,
         })
         self._freematica_log('freematica_sent', 'Enviado a Freematica (BORR_COD %s)' % borr_cod)
+        self._freematica_after_sent()
         return {'success': True, 'message': 'Enviado a Freematica correctamente (BORR_COD %s).' % borr_cod}
+
+    def _freematica_after_sent(self):
+        """Hook para que el modelo concreto reaccione a un envío exitoso (ej.
+        avanzar su propio state machine). No-op por defecto — el mixin no debe
+        asumir que el modelo concreto tiene un campo `state` al estilo Finia."""
+        pass

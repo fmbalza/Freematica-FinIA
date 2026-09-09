@@ -74,6 +74,15 @@ class FiniaInvoice(models.Model):
 
         return problems, problem_codes
 
+    def _freematica_after_sent(self):
+        """Tras un envío exitoso, promueve finia.invoice.state a 'enviado' —
+        el único camino permitido hacia ese estado (ver
+        finia_invoice.py._check_state_transition en finIA_backend). Solo se
+        llega aquí cuando _freematica_check_before_send ya confirmó
+        state == 'contabilizado', así que el salto siempre es
+        contabilizado -> enviado."""
+        self.with_context(freematica_confirmed_send=True).write({'state': 'enviado'})
+
     def action_freematica_check(self):
         """Corre la misma validación que se ejecuta antes de enviar, pero
         sin llamar a la API — pensado para auditar una factura de antemano
