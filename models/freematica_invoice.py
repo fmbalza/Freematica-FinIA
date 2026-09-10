@@ -6,6 +6,7 @@ from odoo import _, models
 from odoo.exceptions import UserError
 
 _ROUND = 2
+_FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
 
 
 class FiniaInvoice(models.Model):
@@ -206,6 +207,12 @@ class FiniaInvoice(models.Model):
             if not cuota:
                 continue
             rate_label = str(int(rate)) if float(rate).is_integer() else str(rate)
+            cpiva_code = _FREEMATICA_CPIVA_CODE.get(int(round(rate)))
+            if cpiva_code is None:
+                raise UserError(_(
+                    'Tipo de IVA %s%% sin código Freematica configurado (BORRID_CPIVA) — '
+                    'solo 0%%, 4%%, 10%%, 21%% están soportados. Factura "%s".'
+                ) % (rate_label, self.display_name))
             lineas.append({
                 'BORRL_CTA': config.cuenta_iva_soportado_default,
                 'BORRL_CONASI': config.concepto_asiento_default or 'FACT',
@@ -218,8 +225,8 @@ class FiniaInvoice(models.Model):
                 'BORRL_FCHDOC': fecha_doc,
                 'BORRL_REF': reference,
                 'IVA': [{
-                    'BORRID_TIMPUES': 'IVA',
-                    'BORRID_CPIVA': rate_label,
+                    'BORRID_TIMPUES': 'S0',
+                    'BORRID_CPIVA': cpiva_code,
                     'BORRID_BIVA': round(bucket['base'], _ROUND),
                     'BORRID_PIVA': rate,
                     'BORRID_CUOTA': cuota,
