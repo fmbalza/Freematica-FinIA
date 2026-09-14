@@ -202,6 +202,7 @@ class FiniaInvoice(models.Model):
                 bucket = by_rate[rate]
                 bucket['base'] += line.subtotal
                 bucket['cuota'] += line.subtotal * (tax.rate / 100.0)
+        iva_entries = []
         for rate, bucket in by_rate.items():
             cuota = round(bucket['cuota'], _ROUND)
             if not cuota:
@@ -224,15 +225,21 @@ class FiniaInvoice(models.Model):
                 'BORRL_DOC': doc_number,
                 'BORRL_FCHDOC': fecha_doc,
                 'BORRL_REF': reference,
-                'IVA': [{
-                    'BORRID_TIMPUES': 'S0',
-                    'BORRID_CPIVA': cpiva_code,
-                    'BORRID_BIVA': round(bucket['base'], _ROUND),
-                    'BORRID_PIVA': rate,
-                    'BORRID_CUOTA': cuota,
-                    'BORRID_TOTCUOTA': cuota,
-                }],
             })
+            iva_entries.append({
+                'BORRID_TIMPUES': 'S0',
+                'BORRID_CPIVA': cpiva_code,
+                'BORRID_BIVA': round(bucket['base'], _ROUND),
+                'BORRID_PIVA': rate,
+                'BORRID_CUOTA': cuota,
+                'BORRID_TOTCUOTA': cuota,
+            })
+        # El detalle de IVA va asociado a la línea del proveedor (junto con
+        # CARTERA), no a la línea de la cuenta de IVA -- confirmado por
+        # Josep Segura/Servinet 2026-09-14: Freematica grababa cabecera y
+        # líneas pero no el registro de IVA con la estructura anterior.
+        if iva_entries:
+            proveedor_linea['IVA'] = iva_entries
 
         total_debe = round(sum(l['BORRL_DDIV'] for l in lineas), _ROUND)
         total_haber = round(sum(l['BORRL_HDIV'] for l in lineas), _ROUND)

@@ -130,6 +130,24 @@ class FreematicaSendableMixin(models.AbstractModel):
         # dan error, solo si son correctos" — no hay término medio.
         response_data = response.get('data') if isinstance(response, dict) else None
         if not isinstance(response_data, dict):
+            confirmed_id = client.extract_confirmed_asiento_id(response_data)
+            if confirmed_id:
+                self.write({
+                    'freematica_state': 'enviado',
+                    'freematica_sent_at': fields.Datetime.now(),
+                    'freematica_error': False,
+                    'freematica_borr_cod': confirmed_id,
+                })
+                self._freematica_log(
+                    'freematica_sent',
+                    'Enviado a Freematica -- asiento %s confirmado por patrón '
+                    '"Asiento generado" (respuesta sin eco completo).' % confirmed_id,
+                )
+                self._freematica_after_sent()
+                return {
+                    'success': True,
+                    'message': 'Enviado a Freematica correctamente (asiento %s).' % confirmed_id,
+                }
             message = (
                 'Freematica no confirmó el envío de "%s": la respuesta no trae el eco '
                 'del asiento (recibido: %r). No se marca como enviada hasta poder '

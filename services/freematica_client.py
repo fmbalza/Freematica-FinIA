@@ -16,6 +16,7 @@ variantes vía `config['lineas_as_json_string']`.
 import copy
 import json
 import logging
+import re
 from datetime import datetime, timezone
 
 import requests
@@ -57,6 +58,24 @@ class FreematicaError(Exception):
 # export-asientos: el envío nunca se confirmó de verdad.
 _ENVELOPE_SUCCESS_CODES = ('200', '201')
 
+# Segunda forma de éxito conocida (además del eco-objeto del asiento):
+# Freematica a veces confirma la creación con un string informativo del
+# tipo "[ID Asiento generado: 7562 de orden asiento 1]" en vez de devolver
+# el asiento como objeto. Confirmado real 2026-09-14 (asiento 7562,
+# FAC-00003, Servinet) -- antes de este fix cualquier `data` string se
+# trataba como rechazo por igual, generando un falso negativo (factura
+# marcada `error` pese a haberse creado el asiento de verdad).
+_SUCCESS_STRING_RE = re.compile(r'asiento\s+generado[:\s]*([0-9]+)', re.IGNORECASE)
+
+
+def extract_confirmed_asiento_id(value):
+    """Si `value` es el string de éxito conocido de Freematica, devuelve
+    el id de asiento real (ej. '7562') como string; si no matchea, None."""
+    if not isinstance(value, str):
+        return None
+    match = _SUCCESS_STRING_RE.search(value)
+    return match.group(1) if match else None
+
 
 def _raise_if_business_error(data, operation):
     if not isinstance(data, dict):
@@ -82,6 +101,13 @@ def _raise_if_business_error(data, operation):
     # diga `errorCode`, es en sí mismo la señal de fallo.
     inner_data = data.get('data')
     if isinstance(inner_data, str) and inner_data.strip():
+        if extract_confirmed_asiento_id(inner_data) is not None:
+            # Forma de éxito confirmada 2026-09-14 contra el asiento real
+            # 7562/FAC-00003 en Servinet: Freematica puede devolver
+            # errorCode "200" con `data` como este string informativo en
+            # vez de como el eco-objeto del asiento, y aun así haber creado
+            # el asiento de verdad. No es un rechazo -- se deja pasar.
+            return
         raise FreematicaError(
             'Freematica rechazó %s: %s' % (operation, inner_data),
             operation, status_code=data.get('errorCode'),
