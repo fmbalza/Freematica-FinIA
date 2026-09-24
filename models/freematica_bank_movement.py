@@ -3,16 +3,14 @@ from odoo import models, fields
 
 
 class FiniaBankMovement(models.Model):
-    """Extiende finia.bank.movement (finIA_backend) con un vínculo directo a
-    una cuenta contable real de Freematica, para movimientos que no
-    corresponden a ninguna factura/albarán/abono/ticket (comisión bancaria,
-    nómina, etc.) — alternativa estructurada al texto libre de `category`."""
+    """Extiende finia.bank.movement (finIA_backend) con la posibilidad de
+    repartir un mismo movimiento entre varias cuentas contables reales de
+    Freematica, cada una con su propio importe (ver
+    freematica_bank_movement_account_line.py) — igual que un movimiento ya
+    puede repartirse entre varias facturas vía finia.bank.movement.match."""
     _inherit = 'finia.bank.movement'
 
-    freematica_account_id = fields.Many2one(
-        'freematica.account', string='Cuenta contable Freematica',
-        domain=[('cod_plan', '=', 'PGCS'), ('cta_activa', '=', True), ('subcuenta', '=', True)],
-        help='Cuenta contable real asignada directamente a este movimiento cuando no '
-             'corresponde a ninguna factura/albarán/abono/ticket. Alternativa '
-             'estructurada al texto libre de `category`.',
+    freematica_account_line_ids = fields.One2many(
+        'freematica.bank.movement.account.line', 'movement_id',
+        string='Cuentas contables asignadas',
     )

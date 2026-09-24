@@ -6,9 +6,9 @@ sin disparar el envío real a Freematica (eso sigue siendo un paso aparte,
 explícito, desde `send-to-freematica`).
 
 También expone el catálogo completo de cuentas (para la pantalla de
-administración de "Cuenta Contable" del frontend) y la asignación directa de
-una cuenta contable a un movimiento bancario sin factura asociada (comisión
-bancaria, nómina, etc.) — ver `finia_bank_movement.py` (freematica_account_id).
+administración de "Cuenta Contable" del frontend) y el reparto de un
+movimiento bancario sin factura entre una o varias cuentas contables reales,
+cada una con su propio importe — ver freematica_bank_movement_account_line.py.
 """
 import json
 import logging
@@ -69,13 +69,43 @@ def _account_dict(record):
     }
 
 
-def _movement_account_dict(movement, account):
+def _account_line_dict(line):
+    return {
+        'id': line.id,
+        'movement_id': line.movement_id.id,
+        'account': _account_dict(line.freematica_account_id),
+        'amount': line.amount,
+    }
+
+
+def _movement_lines_summary(movement):
     return {
         'movement_id': movement.id,
-        'account': _account_dict(account) if account else None,
         'category': movement.category,
         'reconciliation_state': movement.reconciliation_state,
+        'lines': [_account_line_dict(l) for l in movement.freematica_account_line_ids],
     }
+
+
+def _recompute_movement_from_lines(movement):
+    """Recalcula `category` (resumen legible, para vistas que no cargan las
+    líneas reales) y `reconciliation_state` a partir de las líneas de cuenta
+    contable del movimiento — mismo criterio que
+    bank_integration_controller.py::_recompute_reconciliation_state para
+    facturas: 'descartado' (resuelto, sin factura) solo cuando la suma de
+    líneas cubre el importe total; si no, sigue 'pendiente' aunque ya tenga
+    1+ líneas, para que el frontend pueda seguir repartiendo el resto."""
+    lines = movement.freematica_account_line_ids
+    if lines:
+        labels = ['%s (%.2f)' % (l.freematica_account_id.cod_cta, l.amount) for l in lines]
+        category = 'Cuenta contable: ' + ', '.join(labels)
+    else:
+        category = False
+    total_assigned = sum(lines.mapped('amount'))
+    reconciliation_state = (
+        'descartado' if lines and total_assigned >= abs(movement.amount) - 0.01 else 'pendiente'
+    )
+    movement.write({'category': category, 'reconciliation_state': reconciliation_state})
 
 
 class FreematicaAccountsController(http.Controller):
@@ -92,7 +122,8 @@ class FreematicaAccountsController(http.Controller):
     def search_cuentas(self, **kwargs):
         """GET /api/v1/freematica/cuentas?search=<texto>&limit=20
         Busca en el plan de cuentas cacheado (freematica.account) — solo
-        cuentas activas e imputables — para el selector del frontend."""
+        cuentas activas e imputables del plan real de Servinet (PGCS) — para
+        el selector del frontend."""
         query = request.params.get('search', '')
         try:
             limit = int(request.params.get('limit') or 20)
@@ -213,27 +244,68 @@ class FreematicaAccountsController(http.Controller):
             return json_response({'success': False, 'error': str(error)}, 200)
         return json_response({'success': True, 'data': _account_dict(account)})
 
-    # ── Asignación de cuenta contable a un movimiento bancario sin factura ──
-    # Análogo a /api/v1/bank-movements/<id>/categorize (finIA_backend, texto
-    # libre), pero guardando un vínculo real y validado contra el catálogo en
-    # vez de una etiqueta. Vive aquí (no en finIA_backend) porque depende del
-    # catálogo freematica.account, que es específico de este conector.
+    # ── Reparto de un movimiento bancario sin factura entre cuentas reales ──
+    # A diferencia de /api/v1/bank-movements/<id>/categorize (finIA_backend,
+    # una etiqueta de texto libre), esto guarda 1+ vínculos reales y
+    # validados (freematica.bank.movement.account.line), cada uno con su
+    # propio importe — permite repartir un mismo movimiento entre varias
+    # cuentas (p.ej. comisión + su IVA), igual que ya se puede repartir un
+    # movimiento entre varias facturas. Vive aquí (no en finIA_backend)
+    # porque depende del catálogo freematica.account.
 
-    @http.route('/api/v1/freematica/bank-movements/<int:movement_id>/assign-account', type='http',
-                auth='public', methods=['POST', 'OPTIONS'], csrf=False)
-    def assign_bank_movement_account(self, movement_id, **kwargs):
-        """POST /api/v1/freematica/bank-movements/<id>/assign-account
-        Body: {account_id} o {cod_cta, cod_plan?}. Asigna una cuenta contable
-        real directamente al movimiento (para comisiones, nóminas, etc. que no
-        corresponden a ninguna factura/albarán/abono/ticket) — valida contra
-        el catálogo real antes de guardar, igual que el flujo de facturas."""
+    @http.route('/api/v1/freematica/bank-movements/account-lines', type='http', auth='public',
+                methods=['GET', 'OPTIONS'], csrf=False)
+    def bulk_bank_movement_account_lines(self, **kwargs):
+        """GET .../account-lines?movement_ids=1,2,3
+        Devuelve, para cada movimiento pedido, sus líneas de cuenta contable
+        asignadas — para que el frontend las cargue en bloque junto con la
+        lista de movimientos (mismo patrón que finia.bank.movement.match
+        para facturas en el GET /api/v1/bank-movements de finIA_backend)."""
+        if request.httprequest.method == 'OPTIONS':
+            return cors_preflight_response()
+        raw_ids = request.params.get('movement_ids', '')
+        try:
+            movement_ids = [int(x) for x in raw_ids.split(',') if x.strip()]
+        except ValueError:
+            return json_response({'success': False, 'error': 'movement_ids inválido'}, 200)
+        if not movement_ids:
+            return json_response({'success': True, 'data': {}})
+        lines = request.env['freematica.bank.movement.account.line'].sudo().search([
+            ('movement_id', 'in', movement_ids),
+        ])
+        data = {}
+        for line in lines:
+            data.setdefault(str(line.movement_id.id), []).append(_account_line_dict(line))
+        return json_response({'success': True, 'data': data})
+
+    @http.route('/api/v1/freematica/bank-movements/<int:movement_id>/account-lines', type='http',
+                auth='public', methods=['GET', 'POST', 'OPTIONS'], csrf=False)
+    def bank_movement_account_lines(self, movement_id, **kwargs):
+        """GET: lista las líneas de cuenta contable de este movimiento (para
+        abrir el modal ya con lo que tenía asignado). POST body
+        {account_id} o {cod_cta, cod_plan?}, más {amount}: agrega UNA línea
+        nueva — reparto parcial permitido, se puede llamar varias veces para
+        repartir entre distintas cuentas."""
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         movement = request.env['finia.bank.movement'].sudo().browse(movement_id)
         if not movement.exists():
             return json_response({'success': False, 'error': 'Movimiento bancario no encontrado'}, 200)
 
+        if request.httprequest.method == 'GET':
+            return json_response({
+                'success': True,
+                'data': [_account_line_dict(l) for l in movement.freematica_account_line_ids],
+            })
+
         body = _read_json_body()
+        try:
+            amount = float(body.get('amount'))
+        except (TypeError, ValueError):
+            return json_response({'success': False, 'error': 'amount es obligatorio y debe ser numérico'}, 200)
+        if amount <= 0:
+            return json_response({'success': False, 'error': 'amount debe ser mayor que 0'}, 200)
+
         Account = request.env['freematica.account'].sudo()
         account = None
         if body.get('account_id'):
@@ -249,37 +321,39 @@ class FreematicaAccountsController(http.Controller):
                 'error': 'La cuenta indicada no existe en el catálogo, no está activa, o no es imputable.',
             }, 200)
 
-        # Igual que /categorize (finIA_backend): un movimiento con cuenta
-        # asignada directamente no puede tener a la vez un vínculo confirmado
-        # a factura/albarán/abono/ticket.
+        # Igual que el flujo anterior de asignación directa: un movimiento
+        # con cuenta(s) contable(s) asignada(s) no puede tener a la vez un
+        # vínculo confirmado a factura/albarán/abono/ticket.
         request.env['finia.bank.movement.match'].sudo().search([
             ('movement_id', '=', movement.id), ('state', '=', 'confirmado'),
         ]).write({'state': 'rechazado'})
 
-        movement.write({
-            'freematica_account_id': account.id,
-            'category': 'Cuenta contable: %s - %s' % (account.cod_cta, account.des_cta or ''),
-            'reconciliation_state': 'descartado',
+        line = request.env['freematica.bank.movement.account.line'].sudo().create({
+            'movement_id': movement.id, 'freematica_account_id': account.id, 'amount': amount,
         })
-        return json_response({'success': True, 'data': _movement_account_dict(movement, account)})
+        _recompute_movement_from_lines(movement)
+        return json_response({
+            'success': True,
+            'data': {'line': _account_line_dict(line), 'movement': _movement_lines_summary(movement)},
+        }, 201)
 
-    @http.route('/api/v1/freematica/bank-movements/<int:movement_id>/unassign-account', type='http',
-                auth='public', methods=['POST', 'OPTIONS'], csrf=False)
-    def unassign_bank_movement_account(self, movement_id, **kwargs):
-        """POST /api/v1/freematica/bank-movements/<id>/unassign-account
-        Deshace la asignación directa de cuenta contable (vuelve el
-        movimiento a 'pendiente', sin categoría ni cuenta)."""
+    @http.route('/api/v1/freematica/bank-movements/<int:movement_id>/account-lines/<int:line_id>', type='http',
+                auth='public', methods=['DELETE', 'OPTIONS'], csrf=False)
+    def delete_bank_movement_account_line(self, movement_id, line_id, **kwargs):
+        """DELETE .../account-lines/<line_id>
+        Quita UN reparto puntual (el movimiento puede tener varios) — el
+        resto de líneas, si las hay, quedan intactas."""
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         movement = request.env['finia.bank.movement'].sudo().browse(movement_id)
         if not movement.exists():
             return json_response({'success': False, 'error': 'Movimiento bancario no encontrado'}, 200)
-        movement.write({
-            'freematica_account_id': False,
-            'category': False,
-            'reconciliation_state': 'pendiente',
-        })
-        return json_response({'success': True, 'data': {'movement_id': movement.id}})
+        line = request.env['freematica.bank.movement.account.line'].sudo().browse(line_id)
+        if not line.exists() or line.movement_id.id != movement.id:
+            return json_response({'success': False, 'error': 'Línea no encontrada'}, 200)
+        line.unlink()
+        _recompute_movement_from_lines(movement)
+        return json_response({'success': True, 'data': _movement_lines_summary(movement)})
 
     @http.route('/api/v1/invoices/pending-accounting-account', type='http', auth='public', methods=['GET'], csrf=False)
     def pending_accounting_account(self, **kwargs):

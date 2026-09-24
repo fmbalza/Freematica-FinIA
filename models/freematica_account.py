@@ -64,7 +64,7 @@ class FreematicaAccount(models.Model):
         devuelve las primeras `limit` cuentas (orden por código) en vez de
         nada — para poder "navegar" el catálogo antes de escribir."""
         query = (query or '').strip()
-        domain = [('cta_activa', '=', True), ('subcuenta', '=', True)]
+        domain = [('cod_plan', '=', 'PGCS'), ('cta_activa', '=', True), ('subcuenta', '=', True)]
         if not query:
             return self.search(domain, limit=limit, order='cod_cta')
         normalized_query = matching.normalize_name(query)

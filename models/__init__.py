@@ -1,6 +1,7 @@
 from . import freematica_config
 from . import freematica_provider
 from . import freematica_bank_movement
+from . import freematica_bank_movement_account_line
 from . import freematica_account
 from . import freematica_sendable_mixin
 from . import freematica_invoice
