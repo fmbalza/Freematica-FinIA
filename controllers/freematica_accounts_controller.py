@@ -3,7 +3,13 @@
 cuenta contable: buscar en el plan de cuentas real de Freematica, listar
 facturas pendientes de asignación, y guardar lo que el usuario elija —
 sin disparar el envío real a Freematica (eso sigue siendo un paso aparte,
-explícito, desde `send-to-freematica`)."""
+explícito, desde `send-to-freematica`).
+
+También expone el catálogo completo de cuentas (para la pantalla de
+administración de "Cuenta Contable" del frontend) y la asignación directa de
+una cuenta contable a un movimiento bancario sin factura asociada (comisión
+bancaria, nómina, etc.) — ver `finia_bank_movement.py` (freematica_account_id).
+"""
 import json
 import logging
 
@@ -11,6 +17,7 @@ from odoo import http
 from odoo.http import request
 
 from odoo.addons.finIA_backend.controllers.cors_utils import json_response, cors_preflight_response
+from ..services import freematica_matching as matching
 
 _logger = logging.getLogger(__name__)
 
@@ -49,6 +56,28 @@ def _invoice_pending_dict(invoice):
     }
 
 
+def _account_dict(record):
+    return {
+        'id': record.id,
+        'cod_plan': record.cod_plan,
+        'cod_cta': record.cod_cta,
+        'des_cta': record.des_cta,
+        'des_cta2': record.des_cta2,
+        'cta_activa': record.cta_activa,
+        'subcuenta': record.subcuenta,
+        'last_synced_at': record.last_synced_at,
+    }
+
+
+def _movement_account_dict(movement, account):
+    return {
+        'movement_id': movement.id,
+        'account': _account_dict(account) if account else None,
+        'category': movement.category,
+        'reconciliation_state': movement.reconciliation_state,
+    }
+
+
 class FreematicaAccountsController(http.Controller):
 
     @http.route([
@@ -82,6 +111,175 @@ class FreematicaAccountsController(http.Controller):
         except Exception as error:
             _logger.error('Freematica search cuentas error: %s', error)
             return json_response({'success': False, 'error': str(error)}, 200)
+
+    # ── Catálogo completo de cuentas (pantalla de administración) ──────────
+    # Distinto de `search_cuentas` (arriba): ese es el selector compacto para
+    # elegir UNA cuenta en un modal; este es el listado paginado completo,
+    # con creación/edición, para la pantalla de Configuración Contable.
+
+    @http.route('/api/v1/freematica/cuentas/catalog', type='http', auth='public',
+                methods=['GET', 'OPTIONS'], csrf=False)
+    def list_cuentas_catalog(self, **kwargs):
+        """GET /api/v1/freematica/cuentas/catalog?search=&cod_plan=PGCS&limit=50&offset=0
+        Listado paginado del catálogo completo (no solo el top-N del picker),
+        para la pantalla de administración de cuentas contables. Por defecto
+        filtra por `cod_plan=PGCS` (el plan real de Servinet — ver
+        freematica_account.py: PGCD/PGCS/PYM comparten códigos con
+        significados distintos, no mezclar)."""
+        if request.httprequest.method == 'OPTIONS':
+            return cors_preflight_response()
+        query = (request.params.get('search') or '').strip()
+        cod_plan = request.params.get('cod_plan') or 'PGCS'
+        try:
+            limit = int(request.params.get('limit') or 50)
+            offset = int(request.params.get('offset') or 0)
+        except (TypeError, ValueError):
+            return json_response({'success': False, 'error': 'Parámetros de paginación inválidos'}, 200)
+
+        domain = [('cod_plan', '=', cod_plan)]
+        if query:
+            normalized_query = matching.normalize_name(query)
+            domain += ['|', ('cod_cta', 'like', query), ('normalized_des', 'ilike', normalized_query)]
+
+        try:
+            Account = request.env['freematica.account'].sudo()
+            total = Account.search_count(domain)
+            accounts = Account.search(domain, limit=limit, offset=offset, order='cod_cta')
+            return json_response({
+                'success': True,
+                'data': [_account_dict(a) for a in accounts],
+                'total': total,
+                'limit': limit,
+                'offset': offset,
+            })
+        except Exception as error:
+            _logger.error('Freematica list cuentas catalog error: %s', error)
+            return json_response({'success': False, 'error': str(error)}, 200)
+
+    @http.route('/api/v1/freematica/cuentas', type='http', auth='public', methods=['POST'], csrf=False)
+    def create_cuenta(self, **kwargs):
+        """POST /api/v1/freematica/cuentas
+        Crea una cuenta contable manualmente (fuera de la sincronización
+        automática con Freematica). Body: {cod_cta, des_cta, des_cta2?,
+        cod_plan? (default 'PGCS'), cta_activa? (default true), subcuenta?
+        (default true)}."""
+        body = _read_json_body()
+        cod_cta = (body.get('cod_cta') or '').strip()
+        if not cod_cta:
+            return json_response({'success': False, 'error': 'cod_cta es obligatorio'}, 200)
+        cod_plan = (body.get('cod_plan') or 'PGCS').strip()
+
+        Account = request.env['freematica.account'].sudo()
+        existing = Account.search([('cod_plan', '=', cod_plan), ('cod_cta', '=', cod_cta)], limit=1)
+        if existing:
+            return json_response({
+                'success': False,
+                'error': 'Ya existe la cuenta %s en el plan %s.' % (cod_cta, cod_plan),
+            }, 200)
+
+        vals = {
+            'cod_plan': cod_plan,
+            'cod_cta': cod_cta,
+            'des_cta': body.get('des_cta'),
+            'des_cta2': body.get('des_cta2'),
+            'cta_activa': body.get('cta_activa', True),
+            'subcuenta': body.get('subcuenta', True),
+        }
+        try:
+            account = Account.create(vals)
+        except Exception as error:
+            _logger.error('Freematica create cuenta error: %s', error)
+            return json_response({'success': False, 'error': str(error)}, 200)
+        return json_response({'success': True, 'data': _account_dict(account)}, 201)
+
+    @http.route('/api/v1/freematica/cuentas/<int:account_id>', type='http', auth='public',
+                methods=['PUT', 'OPTIONS'], csrf=False)
+    def update_cuenta(self, account_id, **kwargs):
+        """PUT /api/v1/freematica/cuentas/<id>
+        Edita una cuenta existente. `cod_plan`/`cod_cta` son la clave y nunca
+        se editan aquí (crear una nueva si el código estaba mal). Body:
+        {des_cta?, des_cta2?, cta_activa?, subcuenta?}."""
+        if request.httprequest.method == 'OPTIONS':
+            return cors_preflight_response()
+        body = _read_json_body()
+        account = request.env['freematica.account'].sudo().browse(account_id)
+        if not account.exists():
+            return json_response({'success': False, 'error': 'Cuenta no encontrada'}, 200)
+        vals = {k: body[k] for k in ('des_cta', 'des_cta2', 'cta_activa', 'subcuenta') if k in body}
+        try:
+            account.write(vals)
+        except Exception as error:
+            _logger.error('Freematica update cuenta error: %s', error)
+            return json_response({'success': False, 'error': str(error)}, 200)
+        return json_response({'success': True, 'data': _account_dict(account)})
+
+    # ── Asignación de cuenta contable a un movimiento bancario sin factura ──
+    # Análogo a /api/v1/bank-movements/<id>/categorize (finIA_backend, texto
+    # libre), pero guardando un vínculo real y validado contra el catálogo en
+    # vez de una etiqueta. Vive aquí (no en finIA_backend) porque depende del
+    # catálogo freematica.account, que es específico de este conector.
+
+    @http.route('/api/v1/freematica/bank-movements/<int:movement_id>/assign-account', type='http',
+                auth='public', methods=['POST', 'OPTIONS'], csrf=False)
+    def assign_bank_movement_account(self, movement_id, **kwargs):
+        """POST /api/v1/freematica/bank-movements/<id>/assign-account
+        Body: {account_id} o {cod_cta, cod_plan?}. Asigna una cuenta contable
+        real directamente al movimiento (para comisiones, nóminas, etc. que no
+        corresponden a ninguna factura/albarán/abono/ticket) — valida contra
+        el catálogo real antes de guardar, igual que el flujo de facturas."""
+        if request.httprequest.method == 'OPTIONS':
+            return cors_preflight_response()
+        movement = request.env['finia.bank.movement'].sudo().browse(movement_id)
+        if not movement.exists():
+            return json_response({'success': False, 'error': 'Movimiento bancario no encontrado'}, 200)
+
+        body = _read_json_body()
+        Account = request.env['freematica.account'].sudo()
+        account = None
+        if body.get('account_id'):
+            account = Account.browse(int(body['account_id']))
+        elif body.get('cod_cta'):
+            cod_plan = (body.get('cod_plan') or 'PGCS').strip()
+            account = Account.search([
+                ('cod_plan', '=', cod_plan), ('cod_cta', '=', (body['cod_cta'] or '').strip()),
+            ], limit=1)
+        if not account or not account.exists() or not account.cta_activa or not account.subcuenta:
+            return json_response({
+                'success': False,
+                'error': 'La cuenta indicada no existe en el catálogo, no está activa, o no es imputable.',
+            }, 200)
+
+        # Igual que /categorize (finIA_backend): un movimiento con cuenta
+        # asignada directamente no puede tener a la vez un vínculo confirmado
+        # a factura/albarán/abono/ticket.
+        request.env['finia.bank.movement.match'].sudo().search([
+            ('movement_id', '=', movement.id), ('state', '=', 'confirmado'),
+        ]).write({'state': 'rechazado'})
+
+        movement.write({
+            'freematica_account_id': account.id,
+            'category': 'Cuenta contable: %s - %s' % (account.cod_cta, account.des_cta or ''),
+            'reconciliation_state': 'descartado',
+        })
+        return json_response({'success': True, 'data': _movement_account_dict(movement, account)})
+
+    @http.route('/api/v1/freematica/bank-movements/<int:movement_id>/unassign-account', type='http',
+                auth='public', methods=['POST', 'OPTIONS'], csrf=False)
+    def unassign_bank_movement_account(self, movement_id, **kwargs):
+        """POST /api/v1/freematica/bank-movements/<id>/unassign-account
+        Deshace la asignación directa de cuenta contable (vuelve el
+        movimiento a 'pendiente', sin categoría ni cuenta)."""
+        if request.httprequest.method == 'OPTIONS':
+            return cors_preflight_response()
+        movement = request.env['finia.bank.movement'].sudo().browse(movement_id)
+        if not movement.exists():
+            return json_response({'success': False, 'error': 'Movimiento bancario no encontrado'}, 200)
+        movement.write({
+            'freematica_account_id': False,
+            'category': False,
+            'reconciliation_state': 'pendiente',
+        })
+        return json_response({'success': True, 'data': {'movement_id': movement.id}})
 
     @http.route('/api/v1/invoices/pending-accounting-account', type='http', auth='public', methods=['GET'], csrf=False)
     def pending_accounting_account(self, **kwargs):
