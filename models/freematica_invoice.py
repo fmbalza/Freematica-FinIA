@@ -1,5 +1,4 @@
 # -*- coding: utf-8 -*-
-import re
 from collections import defaultdict
 
 from odoo import _, models
@@ -102,22 +101,6 @@ class FiniaInvoice(models.Model):
             },
         }
 
-    def _freematica_doc_number(self):
-        """Extrae la parte numérica de ocr_invoice_number para BORRL_DOC/
-        BORRC_DOC (number(10) en el esquema); si no hay dígitos
-        aprovechables, usa el id de la factura. El esquema documentado
-        parece pensado para documentos de venta con numeración puramente
-        numérica — confirmar con Freematica si esto es aceptable para
-        facturas de proveedor con numeración alfanumérica."""
-        self.ensure_one()
-        digits = re.sub(r'\D', '', self.ocr_invoice_number or '')
-        if digits:
-            try:
-                return int(digits[-10:])
-            except ValueError:
-                pass
-        return self.id
-
     def _freematica_build_asiento_payload(self, config):
         self.ensure_one()
         vendor = self.ocr_vendor_id
@@ -125,9 +108,14 @@ class FiniaInvoice(models.Model):
         fecha_doc = (self.ocr_invoice_date or accounting_date).strftime('%Y%m%d')
         fecha_asiento = accounting_date.strftime('%Y%m%d')
         currency = (self.currency or 'EUR')[:4]
-        doc_number = self._freematica_doc_number()
+        # Nº de documento (BORRL_DOC/BORRC_DOC) se omite a propósito: debe ser
+        # el siguiente del contador FF de Freematica (8 dígitos, correlativo)
+        # y el API no expone contadores. Josep Segura/Servinet 2026-10: enviar
+        # el campo vacío para que Freematica lo asigne al importar -- pendiente
+        # de confirmar con una prueba real.
         serie = (config.serie_contable_default or '')[:5]
         reference = (self.posting_reference or self.name or '')[:40]
+        calendario = str(accounting_date.year)
         descripcion_base = ('Factura %s - %s' % (self.ocr_invoice_number or self.name, vendor.name))[:40]
 
         lineas = []
@@ -144,8 +132,8 @@ class FiniaInvoice(models.Model):
             'BORRL_DIV': currency,
             'BORRL_DDIV': 0,
             'BORRL_HDIV': round(self.ocr_total_amount, _ROUND),
+            'BORRL_CAL': calendario,
             'BORRL_SER': serie,
-            'BORRL_DOC': doc_number,
             'BORRL_NOMAUX': vendor.name[:200],
             'BORRL_NIF': (vendor.nif or '')[:15],
             'BORRL_FCHDOC': fecha_doc,
@@ -153,20 +141,23 @@ class FiniaInvoice(models.Model):
         }
         if config.grupo_aux_proveedor:
             proveedor_linea['BORRL_GRUPAUX'] = config.grupo_aux_proveedor
-        if self.ocr_due_date:
-            cartera_entry = {
-                'BORRC_TIPOCAR': '1',
-                'BORRC_DOC': doc_number,
-                'BORRC_ORD': 1,
-                'BORRC_CODAUX': vendor.freematica_cod_aux,
-                'BORRC_FCHDOC': fecha_doc,
-                'BORRC_FCHVCTO': self.ocr_due_date.strftime('%Y%m%d'),
-                'BORRC_DIV': currency,
-                'BORRC_IMPDV': round(self.ocr_total_amount, _ROUND),
-            }
-            if config.grupo_aux_proveedor:
-                cartera_entry['BORRC_GRUPAUX'] = config.grupo_aux_proveedor
-            proveedor_linea['CARTERA'] = [cartera_entry]
+        # Cartera obligatoria siempre (Josep Segura/Servinet 2026-10): si la
+        # factura no trae vencimiento se informa la fecha de la factura.
+        fecha_vcto = self.ocr_due_date.strftime('%Y%m%d') if self.ocr_due_date else fecha_doc
+        cartera_entry = {
+            'BORRC_TIPOCAR': '1',
+            'BORRC_CALEN': calendario,
+            'BORRC_SER': serie,
+            'BORRC_ORD': 1,
+            'BORRC_CODAUX': vendor.freematica_cod_aux,
+            'BORRC_FCHDOC': fecha_doc,
+            'BORRC_FCHVCTO': fecha_vcto,
+            'BORRC_DIV': currency,
+            'BORRC_IMPDV': round(self.ocr_total_amount, _ROUND),
+        }
+        if config.grupo_aux_proveedor:
+            cartera_entry['BORRC_GRUPAUX'] = config.grupo_aux_proveedor
+        proveedor_linea['CARTERA'] = [cartera_entry]
         lineas.append(proveedor_linea)
 
         # Líneas Debe: gasto/compra, agrupadas por cuenta contable ya
@@ -186,8 +177,8 @@ class FiniaInvoice(models.Model):
                 'BORRL_DIV': currency,
                 'BORRL_DDIV': round(bucket['subtotal'], _ROUND),
                 'BORRL_HDIV': 0,
+                'BORRL_CAL': calendario,
                 'BORRL_SER': serie,
-                'BORRL_DOC': doc_number,
                 'BORRL_FCHDOC': fecha_doc,
                 'BORRL_REF': reference,
             })
@@ -221,8 +212,8 @@ class FiniaInvoice(models.Model):
                 'BORRL_DIV': currency,
                 'BORRL_DDIV': cuota,
                 'BORRL_HDIV': 0,
+                'BORRL_CAL': calendario,
                 'BORRL_SER': serie,
-                'BORRL_DOC': doc_number,
                 'BORRL_FCHDOC': fecha_doc,
                 'BORRL_REF': reference,
             })
@@ -255,7 +246,7 @@ class FiniaInvoice(models.Model):
             'BORR_COD': ('INV%07d' % self.id)[:10],
             'BORR_PLANT': plantilla or '',
             'BORR_FCHASI': fecha_asiento,
-            'BORR_CALEN': str(accounting_date.year),
+            'BORR_CALEN': calendario,
             'BORR_PER': accounting_date.month,
             'BORR_DIARIO': config.diario_compras,
             'BORR_REF': reference,
