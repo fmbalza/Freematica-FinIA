@@ -23,6 +23,7 @@
                                    decoration-info="freematica_state in ('no_enviado', 'enviando')"/>
                             <field name="freematica_sent_at" readonly="1"/>
                             <field name="freematica_borr_cod" readonly="1"/>
+                            <field name="freematica_doc_number" readonly="1"/>
                         </group>
                         <group>
                             <field name="freematica_error" readonly="1" widget="text"/>

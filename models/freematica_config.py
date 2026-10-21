@@ -90,6 +90,13 @@ class FreematicaConfig(models.Model):
         help='Opcional. Se omite del payload si se deja en 0.',
     )
     concepto_asiento_default = fields.Char(string='Concepto de asiento (BORRL_CONASI)', default='FACT')
+    contador_documento_listo = fields.Boolean(
+        string='Contador de documento listo',
+        help='Activar solo después de fijar en la secuencia "freematica.documento.serie" el '
+             'próximo nº del ejercicio en curso (el siguiente al último registrado en '
+             'Freematica para la serie). Mientras esté desactivado no se envía ninguna factura, '
+             'para no repetir números ya usados. Los ejercicios nuevos empiezan en 1 solos.',
+    )
     plantilla_normal = fields.Char(
         string='Plantilla — factura normal (BORR_PLANT)', default='30',
         help='Confirmado con Servinet (2026-08-14): "30 - Factura Proveedor ICA" para '

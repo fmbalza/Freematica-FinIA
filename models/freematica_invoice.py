@@ -1,16 +1,23 @@
 # -*- coding: utf-8 -*-
 from collections import defaultdict
 
-from odoo import _, models
+from odoo import _, fields, models
 from odoo.exceptions import UserError
 
 _ROUND = 2
 _FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
+_FREEMATICA_DOC_SEQUENCE = 'freematica.documento.serie'
 
 
 class FiniaInvoice(models.Model):
     _name = 'finia.invoice'
     _inherit = ['finia.invoice', 'freematica.sendable.mixin']
+
+    freematica_doc_number = fields.Integer(
+        string='Nº documento Freematica (BORRL_DOC)', readonly=True, copy=False,
+        help='Número correlativo de la serie contable, asignado por Finia la primera vez '
+             'que se intenta enviar la factura y reutilizado en los reintentos.',
+    )
 
     def _freematica_check_before_send(self):
         """Junta TODOS los problemas encontrados (en vez de fallar con el
@@ -101,6 +108,30 @@ class FiniaInvoice(models.Model):
             },
         }
 
+    def _freematica_assign_doc_number(self, config, accounting_date):
+        """Nº de documento de la serie contable (BORRL_DOC/BORRC_DOC).
+        Josep Segura/Servinet 2026-10: lo genera Finia (el API no expone el
+        contador de Freematica), correlativo por ejercicio — sigue al último
+        nº registrado en Freematica y vuelve a empezar cada año. Se asigna
+        una sola vez y se guarda en la factura, para que un reintento tras
+        un rechazo reutilice el mismo número en vez de dejar un hueco."""
+        self.ensure_one()
+        if self.freematica_doc_number:
+            return self.freematica_doc_number
+        if not config.contador_documento_listo:
+            raise UserError(_(
+                'El contador de nº de documento de Freematica no está inicializado: fija el '
+                'próximo número del ejercicio en la secuencia "%s" y marca "Contador de '
+                'documento listo" en la configuración de Freematica.'
+            ) % _FREEMATICA_DOC_SEQUENCE)
+        number = self.env['ir.sequence'].sudo().next_by_code(
+            _FREEMATICA_DOC_SEQUENCE, sequence_date=accounting_date,
+        )
+        if not number:
+            raise UserError(_('No existe la secuencia "%s".') % _FREEMATICA_DOC_SEQUENCE)
+        self.write({'freematica_doc_number': int(number)})
+        return self.freematica_doc_number
+
     def _freematica_build_asiento_payload(self, config):
         self.ensure_one()
         vendor = self.ocr_vendor_id
@@ -108,11 +139,6 @@ class FiniaInvoice(models.Model):
         fecha_doc = (self.ocr_invoice_date or accounting_date).strftime('%Y%m%d')
         fecha_asiento = accounting_date.strftime('%Y%m%d')
         currency = (self.currency or 'EUR')[:4]
-        # Nº de documento (BORRL_DOC/BORRC_DOC) se omite a propósito: debe ser
-        # el siguiente del contador FF de Freematica (8 dígitos, correlativo)
-        # y el API no expone contadores. Josep Segura/Servinet 2026-10: enviar
-        # el campo vacío para que Freematica lo asigne al importar -- pendiente
-        # de confirmar con una prueba real.
         serie = (config.serie_contable_default or '')[:5]
         reference = (self.posting_reference or self.name or '')[:40]
         calendario = str(accounting_date.year)
@@ -239,6 +265,14 @@ class FiniaInvoice(models.Model):
                 'El asiento no está balanceado (Debe %.2f vs. Haber %.2f) — no se envía a '
                 'Freematica. Revisa las cuentas/importes de la factura "%s".'
             ) % (total_debe, total_haber, self.display_name))
+
+        # El nº de documento se asigna al final, ya validado el asiento: un
+        # asiento que ni se llega a enviar no debe consumir número.
+        doc_number = self._freematica_assign_doc_number(config, accounting_date)
+        for linea in lineas:
+            linea['BORRL_DOC'] = doc_number
+        for cartera_entry in proveedor_linea['CARTERA']:
+            cartera_entry['BORRC_DOC'] = doc_number
 
         plantilla = config.plantilla_irpf if vendor.freematica_has_irpf else config.plantilla_normal
         return {

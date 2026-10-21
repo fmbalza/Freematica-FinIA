@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Nº de documento (BORRL_DOC) de la serie contable de facturas de
+             proveedor: correlativo y sin huecos, reinicia cada ejercicio. El
+             tramo del ejercicio en curso se inicializa a mano con el
+             siguiente al último nº registrado en Freematica. -->
+        <record id="seq_freematica_documento_serie" model="ir.sequence">
+            <field name="name">Freematica: nº documento serie contable</field>
+            <field name="code">freematica.documento.serie</field>
+            <field name="implementation">no_gap</field>
+            <field name="use_date_range" eval="True"/>
+            <field name="padding">0</field>
+            <field name="number_increment">1</field>
+        </record>
+    </data>
+</odoo>

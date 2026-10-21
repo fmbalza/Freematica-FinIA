@@ -52,6 +52,7 @@
                             <field name="cuenta_proveedor_default"/>
                             <field name="cuenta_iva_soportado_default"/>
                             <field name="serie_contable_default"/>
+                            <field name="contador_documento_listo"/>
                             <field name="grupo_aux_proveedor"/>
                             <field name="concepto_asiento_default"/>
                             <field name="plantilla_normal"/>
