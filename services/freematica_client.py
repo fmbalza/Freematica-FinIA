@@ -13,6 +13,7 @@ Documentación de referencia: `Documentacion_API_Freematica_Asientos_Contables.m
 array serializado — por eso `_serialize_lineas_if_needed` soporta ambas
 variantes vía `config['lineas_as_json_string']`.
 """
+import base64
 import copy
 import json
 import logging
@@ -27,6 +28,7 @@ LOGIN_PATH = '/ppre/v2/control/entrada'
 IMPORT_ASIENTOS_PATH = '/pcon/v2/import-asientos'
 EXPORT_ASIENTOS_PATH = '/pcon/v2/export-asientos'
 PROVEEDORES_PATH = '/pgrl/v2/proveedores'
+LOCALIZACIONES_PAGO_PROVEEDORES_PATH = '/pgrl/v2/localizaciones-pago-proveedores'
 CUENTAS_PATH = '/pcon/v2/cuentas'
 
 # Claves, dentro de una línea de asiento, que representan listas de objetos y
@@ -261,6 +263,17 @@ def list_proveedores(config, page=None, items=None, rquery=None, token=None):
     if rquery:
         params['rQuery'] = rquery
     return _request(config, 'GET', PROVEEDORES_PATH, 'proveedores', params=params, token=token)
+
+
+def get_localizacion_pago_proveedor(config, grupo, cod_pro, localizacion=1, token=None):
+    """GET /pgrl/v2/localizaciones-pago-proveedores/{idReg} — forma de pago
+    (COD_FPAGO) de una localización de proveedor. El idReg es
+    base64("<grupo>__<cod_pro>__<localización>"), deducido de los listados
+    (p. ej. "MV9fMTAwMDFfXzE=" = "1__10001__1"); el filtro rQuery de este
+    listado se ignora, así que se consulta el registro directo."""
+    id_reg = base64.b64encode(('%s__%s__%s' % (grupo, cod_pro, localizacion)).encode()).decode()
+    path = '%s/%s' % (LOCALIZACIONES_PAGO_PROVEEDORES_PATH, id_reg)
+    return _request(config, 'GET', path, 'localizaciones-pago-proveedores', token=token)
 
 
 def list_cuentas(config, page=None, items=None, rquery=None, token=None):

@@ -63,6 +63,27 @@ class FreematicaProvider(models.Model):
         for record in self:
             record.normalized_nif = matching.normalize_nif(record.nif)
 
+    def _freematica_localizacion_pago(self, config):
+        """Localización y forma de pago por defecto del proveedor
+        (localización 1), para BORRL_FPAGO/BORRL_LOC y la Cartera: Servinet
+        las informa en cada factura (ej. NETEGES SOLSONA = TB2,
+        "Transferencia a 30 dias"). Se consulta en el momento del envío
+        porque es una sola llamada y así refleja cualquier cambio en
+        Freematica. Devuelve {} si el proveedor no tiene localización."""
+        if not self:
+            return {}
+        self.ensure_one()
+        grupo = config.grupo_aux_proveedor or 1
+        response = client.get_localizacion_pago_proveedor(
+            config._as_client_config(), grupo, self.cod_pro, token=config._ensure_valid_token(),
+        )
+        data = response.get('data') if isinstance(response, dict) else None
+        if isinstance(data, dict) and isinstance(data.get('items'), list):
+            data = data['items'][0] if data['items'] else None
+        if not isinstance(data, dict) or not data.get('COD_FPAGO'):
+            return {}
+        return {'fpago': data['COD_FPAGO'], 'loc': int(data.get('LOCALIZ_PRO') or 1)}
+
     @api.model
     def sync_from_freematica(self, config=None, force=False):
         """Reanudable, ver freematica_account.py::sync_from_freematica

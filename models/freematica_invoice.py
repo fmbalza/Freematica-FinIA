@@ -1,5 +1,9 @@
 # -*- coding: utf-8 -*-
+import calendar
 from collections import defaultdict
+from datetime import date, datetime
+
+import pytz
 
 from odoo import _, fields, models
 from odoo.exceptions import UserError
@@ -7,6 +11,26 @@ from odoo.exceptions import UserError
 _ROUND = 2
 _FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
 _FREEMATICA_DOC_SEQUENCE = 'freematica.documento.serie'
+# Tipo de línea (BORRL_TIPOLIN) de la plantilla de factura de proveedor, tal
+# como aparecen en los asientos reales de Servinet (export-asientos, plantilla 30).
+_TIPOLIN_PROVEEDOR = '2'
+_TIPOLIN_IVA = '4'
+_TIPOLIN_GASTO = '21'
+# Cartera de proveedor (en los asientos reales de Servinet; 1 = clientes).
+_TIPOCAR_PROVEEDOR = '2'
+
+
+def freematica_fecha_registro(fecha_factura, hoy):
+    """Fecha de registro contable (BORR_FCHASI) según la regla del SII que
+    aplica Servinet (Sonia, 2026-10): una factura de un mes anterior se
+    registra con el último día de ese mes anterior al de hoy si se
+    contabiliza hasta el día 15; a partir del 16, con la fecha de hoy. Una
+    factura del mes en curso, con la fecha de hoy. La fecha de la factura
+    viaja aparte, en BORRL_FCHDOC."""
+    if (fecha_factura.year, fecha_factura.month) >= (hoy.year, hoy.month) or hoy.day > 15:
+        return hoy
+    anio, mes = (hoy.year, hoy.month - 1) if hoy.month > 1 else (hoy.year - 1, 12)
+    return date(anio, mes, calendar.monthrange(anio, mes)[1])
 
 
 class FiniaInvoice(models.Model):
@@ -135,14 +159,21 @@ class FiniaInvoice(models.Model):
     def _freematica_build_asiento_payload(self, config):
         self.ensure_one()
         vendor = self.ocr_vendor_id
-        accounting_date = self.accounting_date or self.ocr_invoice_date
-        fecha_doc = (self.ocr_invoice_date or accounting_date).strftime('%Y%m%d')
-        fecha_asiento = accounting_date.strftime('%Y%m%d')
+        fecha_factura = self.ocr_invoice_date or self.accounting_date
+        hoy = datetime.now(pytz.timezone('Europe/Madrid')).date()
+        fecha_registro = freematica_fecha_registro(fecha_factura, hoy)
+        fecha_doc = fecha_factura.strftime('%Y%m%d')
+        fecha_asiento = fecha_registro.strftime('%Y%m%d')
         currency = (self.currency or 'EUR')[:4]
         serie = (config.serie_contable_default or '')[:5]
-        reference = (self.posting_reference or self.name or '')[:40]
-        calendario = str(accounting_date.year)
-        descripcion_base = ('Factura %s - %s' % (self.ocr_invoice_number or self.name, vendor.name))[:40]
+        # Ref. asiento = nº de la factura tal como figura en el documento
+        # (Sonia/Servinet 2026-10), no la referencia interna de Finia.
+        reference = (self.ocr_invoice_number or self.name or '')[:40]
+        calendario = str(fecha_registro.year)
+        concepto = config.concepto_asiento_default or 'FACT'
+        # Mismo formato que los asientos que registra Servinet a mano.
+        descripcion_base = ('Su Fra. %s %s' % (reference, vendor.name))[:40]
+        localizacion = vendor.freematica_provider_id._freematica_localizacion_pago(config)
 
         lineas = []
 
@@ -153,11 +184,12 @@ class FiniaInvoice(models.Model):
         proveedor_linea = {
             'BORRL_CTA': cuenta_proveedor,
             'BORRL_CODAUX': vendor.freematica_cod_aux,
-            'BORRL_CONASI': config.concepto_asiento_default or 'FACT',
+            'BORRL_CONASI': concepto,
             'BORRL_DESCON': descripcion_base,
             'BORRL_DIV': currency,
             'BORRL_DDIV': 0,
-            'BORRL_HDIV': round(self.ocr_total_amount, _ROUND),
+            'BORRL_HDIV': 0,  # se fija al final con la suma del Debe
+            'BORRL_TIPOLIN': _TIPOLIN_PROVEEDOR,
             'BORRL_CAL': calendario,
             'BORRL_SER': serie,
             'BORRL_NOMAUX': vendor.name[:200],
@@ -165,13 +197,18 @@ class FiniaInvoice(models.Model):
             'BORRL_FCHDOC': fecha_doc,
             'BORRL_REF': reference,
         }
-        if config.grupo_aux_proveedor:
-            proveedor_linea['BORRL_GRUPAUX'] = config.grupo_aux_proveedor
+        # Grupo auxiliar de proveedores: los asientos reales de Servinet usan
+        # 1; con la config en 0 no se enviaba y la Cartera no se generaba.
+        grupo_aux = config.grupo_aux_proveedor or 1
+        proveedor_linea['BORRL_GRUPAUX'] = grupo_aux
+        if localizacion.get('fpago'):
+            proveedor_linea['BORRL_FPAGO'] = localizacion['fpago']
+            proveedor_linea['BORRL_LOC'] = localizacion['loc']
         # Cartera obligatoria siempre (Josep Segura/Servinet 2026-10): si la
         # factura no trae vencimiento se informa la fecha de la factura.
         fecha_vcto = self.ocr_due_date.strftime('%Y%m%d') if self.ocr_due_date else fecha_doc
         cartera_entry = {
-            'BORRC_TIPOCAR': '1',
+            'BORRC_TIPOCAR': _TIPOCAR_PROVEEDOR,
             'BORRC_CALEN': calendario,
             'BORRC_SER': serie,
             'BORRC_ORD': 1,
@@ -179,10 +216,12 @@ class FiniaInvoice(models.Model):
             'BORRC_FCHDOC': fecha_doc,
             'BORRC_FCHVCTO': fecha_vcto,
             'BORRC_DIV': currency,
-            'BORRC_IMPDV': round(self.ocr_total_amount, _ROUND),
+            'BORRC_IMPDV': 0,  # se fija al final con la suma del Debe
         }
-        if config.grupo_aux_proveedor:
-            cartera_entry['BORRC_GRUPAUX'] = config.grupo_aux_proveedor
+        cartera_entry['BORRC_GRUPAUX'] = grupo_aux
+        if localizacion.get('fpago'):
+            cartera_entry['BORRC_FPAGO'] = localizacion['fpago']
+            cartera_entry['BORRC_LOC'] = localizacion['loc']
         proveedor_linea['CARTERA'] = [cartera_entry]
         lineas.append(proveedor_linea)
 
@@ -198,11 +237,12 @@ class FiniaInvoice(models.Model):
         for account, bucket in by_account.items():
             lineas.append({
                 'BORRL_CTA': account,
-                'BORRL_CONASI': config.concepto_asiento_default or 'FACT',
-                'BORRL_DESCON': (', '.join(bucket['names']) or descripcion_base)[:40],
+                'BORRL_CONASI': concepto,
+                'BORRL_DESCON': descripcion_base,
                 'BORRL_DIV': currency,
                 'BORRL_DDIV': round(bucket['subtotal'], _ROUND),
                 'BORRL_HDIV': 0,
+                'BORRL_TIPOLIN': _TIPOLIN_GASTO,
                 'BORRL_CAL': calendario,
                 'BORRL_SER': serie,
                 'BORRL_FCHDOC': fecha_doc,
@@ -233,11 +273,12 @@ class FiniaInvoice(models.Model):
                 ) % (rate_label, self.display_name))
             lineas.append({
                 'BORRL_CTA': config.cuenta_iva_soportado_default,
-                'BORRL_CONASI': config.concepto_asiento_default or 'FACT',
-                'BORRL_DESCON': ('IVA soportado %s%%' % rate_label)[:40],
+                'BORRL_CONASI': concepto,
+                'BORRL_DESCON': descripcion_base,
                 'BORRL_DIV': currency,
                 'BORRL_DDIV': cuota,
                 'BORRL_HDIV': 0,
+                'BORRL_TIPOLIN': _TIPOLIN_IVA,
                 'BORRL_CAL': calendario,
                 'BORRL_SER': serie,
                 'BORRL_FCHDOC': fecha_doc,
@@ -258,17 +299,23 @@ class FiniaInvoice(models.Model):
         if iva_entries:
             proveedor_linea['IVA'] = iva_entries
 
+        # El Haber del proveedor (y la Cartera) es la suma del Debe (bases +
+        # cuotas redondeadas), no el total leído por OCR: así el asiento cuadra
+        # al céntimo (el total OCR puede diferir en 0,01 por redondeo — pasó
+        # en la factura 59: 465,92 vs. 465,91). Una diferencia mayor indica
+        # líneas o impuestos mal leídos y no se envía.
         total_debe = round(sum(l['BORRL_DDIV'] for l in lineas), _ROUND)
-        total_haber = round(sum(l['BORRL_HDIV'] for l in lineas), _ROUND)
-        if abs(total_debe - total_haber) > 0.01:
+        if abs(total_debe - (self.ocr_total_amount or 0.0)) > 0.05:
             raise UserError(_(
-                'El asiento no está balanceado (Debe %.2f vs. Haber %.2f) — no se envía a '
-                'Freematica. Revisa las cuentas/importes de la factura "%s".'
-            ) % (total_debe, total_haber, self.display_name))
+                'La suma de bases e IVA (%.2f) no coincide con el total de la factura (%.2f) — '
+                'no se envía a Freematica. Revisa las líneas e impuestos de la factura "%s".'
+            ) % (total_debe, self.ocr_total_amount or 0.0, self.display_name))
+        proveedor_linea['BORRL_HDIV'] = total_debe
+        cartera_entry['BORRC_IMPDV'] = total_debe
 
         # El nº de documento se asigna al final, ya validado el asiento: un
         # asiento que ni se llega a enviar no debe consumir número.
-        doc_number = self._freematica_assign_doc_number(config, accounting_date)
+        doc_number = self._freematica_assign_doc_number(config, fecha_registro)
         for linea in lineas:
             linea['BORRL_DOC'] = doc_number
         for cartera_entry in proveedor_linea['CARTERA']:
@@ -281,7 +328,7 @@ class FiniaInvoice(models.Model):
             'BORR_PLANT': plantilla or '',
             'BORR_FCHASI': fecha_asiento,
             'BORR_CALEN': calendario,
-            'BORR_PER': accounting_date.month,
+            'BORR_PER': fecha_registro.month,
             'BORR_DIARIO': config.diario_compras,
             'BORR_REF': reference,
             'BORR_CODDIV': currency,
