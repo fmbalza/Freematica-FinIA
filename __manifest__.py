@@ -1,6 +1,6 @@
 {
     'name': 'FinIA - Freematica',
-    'version': '18.0.1.4.0',
+    'version': '18.0.1.5.0',
     'category': 'Accounting',
     'summary': 'Integración con Freematica (e-Satellite): envío de facturas como asientos contables',
     'description': """

@@ -90,6 +90,12 @@ class FreematicaConfig(models.Model):
         help='Opcional. Se omite del payload si se deja en 0.',
     )
     concepto_asiento_default = fields.Char(string='Concepto de asiento (BORRL_CONASI)', default='FACT')
+    fecha_inicio_envio = fields.Date(
+        string='Enviar facturas recibidas desde',
+        help='Solo se envían a Freematica las facturas recibidas (fecha de recepción) desde este '
+             'día. Las anteriores ya las registró el cliente directamente en Freematica y '
+             'enviarlas las duplicaría. Servinet: desde el 23/10/2026.',
+    )
     contador_documento_listo = fields.Boolean(
         string='Contador de documento listo',
         help='Activar solo después de fijar en la secuencia "freematica.documento.serie" el '

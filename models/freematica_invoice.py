@@ -63,6 +63,15 @@ class FiniaInvoice(models.Model):
         if not (self.ocr_invoice_number or self.name):
             problems.append('falta el número de factura')
             problem_codes.append('missing_invoice_number')
+        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        recibida = fields.Datetime.to_datetime(self.reception_date or self.create_date)
+        if config.fecha_inicio_envio and recibida and recibida.date() < config.fecha_inicio_envio:
+            problems.append(
+                'la factura se recibió el %s, antes del inicio de envíos a Freematica (%s): las '
+                'anteriores las registra el cliente directamente en Freematica y enviarla la '
+                'duplicaría' % (recibida.strftime('%d/%m/%Y'), config.fecha_inicio_envio.strftime('%d/%m/%Y'))
+            )
+            problem_codes.append('before_send_start_date')
         if not self.ocr_invoice_date:
             problems.append('falta la fecha de factura')
             problem_codes.append('missing_invoice_date')
