@@ -1,0 +1,167 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Tabla de formas de pago de Servinet (Sonia, 2026-10-27). Los días se
+         leen de la descripción ("A 30 DIAS"); sin número, 0 (pago inmediato). -->
+    <data noupdate="1">
+        <record id="payment_term_ab0" model="freematica.payment.term">
+            <field name="code">AB0</field>
+            <field name="name">ABONO A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_cf0" model="freematica.payment.term">
+            <field name="code">CF0</field>
+            <field name="name">CONFIRMING A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_cf1" model="freematica.payment.term">
+            <field name="code">CF1</field>
+            <field name="name">CONFIRMING 30 DIAS</field>
+            <field name="days" eval="30"/>
+        </record>
+        <record id="payment_term_cf2" model="freematica.payment.term">
+            <field name="code">CF2</field>
+            <field name="name">CONFIRMING 60 DIAS</field>
+            <field name="days" eval="60"/>
+        </record>
+        <record id="payment_term_cf3" model="freematica.payment.term">
+            <field name="code">CF3</field>
+            <field name="name">CONFIIRMING 90 DIAS</field>
+            <field name="days" eval="90"/>
+        </record>
+        <record id="payment_term_cf4" model="freematica.payment.term">
+            <field name="code">CF4</field>
+            <field name="name">CONFIRMING 210 DIAS</field>
+            <field name="days" eval="210"/>
+        </record>
+        <record id="payment_term_co0" model="freematica.payment.term">
+            <field name="code">CO0</field>
+            <field name="name">CONTADO A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_fa0" model="freematica.payment.term">
+            <field name="code">FA0</field>
+            <field name="name">FACTORING A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_gi0" model="freematica.payment.term">
+            <field name="code">GI0</field>
+            <field name="name">GIRO DOMICILIADO A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_le0" model="freematica.payment.term">
+            <field name="code">LE0</field>
+            <field name="name">LETRA A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_pa0" model="freematica.payment.term">
+            <field name="code">PA0</field>
+            <field name="name">PAGARE A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_pa1" model="freematica.payment.term">
+            <field name="code">PA1</field>
+            <field name="name">PAGARÉ 120 DIAS</field>
+            <field name="days" eval="120"/>
+        </record>
+        <record id="payment_term_pa3" model="freematica.payment.term">
+            <field name="code">PA3</field>
+            <field name="name">PAGARE A 30 DIAS</field>
+            <field name="days" eval="30"/>
+        </record>
+        <record id="payment_term_pa6" model="freematica.payment.term">
+            <field name="code">PA6</field>
+            <field name="name">PAGARE A 60 DIAS</field>
+            <field name="days" eval="60"/>
+        </record>
+        <record id="payment_term_pa9" model="freematica.payment.term">
+            <field name="code">PA9</field>
+            <field name="name">PAGARE A 90 DIAS</field>
+            <field name="days" eval="90"/>
+        </record>
+        <record id="payment_term_rd0" model="freematica.payment.term">
+            <field name="code">RD0</field>
+            <field name="name">RECIBO DOMICILIADO A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_rd1" model="freematica.payment.term">
+            <field name="code">RD1</field>
+            <field name="name">RECIBO DOMICIALIADO 30 DIAS</field>
+            <field name="days" eval="30"/>
+        </record>
+        <record id="payment_term_rd2" model="freematica.payment.term">
+            <field name="code">RD2</field>
+            <field name="name">RECIBO DOMICILIADO 50 DIAS</field>
+            <field name="days" eval="50"/>
+        </record>
+        <record id="payment_term_rd3" model="freematica.payment.term">
+            <field name="code">RD3</field>
+            <field name="name">RECIBO DOMICILIADO 60 DIAS</field>
+            <field name="days" eval="60"/>
+        </record>
+        <record id="payment_term_rd4" model="freematica.payment.term">
+            <field name="code">RD4</field>
+            <field name="name">RECIBO DOMICILIADO 75 DIAS</field>
+            <field name="days" eval="75"/>
+        </record>
+        <record id="payment_term_rd5" model="freematica.payment.term">
+            <field name="code">RD5</field>
+            <field name="name">RECIBO DOMICILIADO 90 DIAS</field>
+            <field name="days" eval="90"/>
+        </record>
+        <record id="payment_term_rp0" model="freematica.payment.term">
+            <field name="code">RP0</field>
+            <field name="name">REPOSICIONES A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_ta0" model="freematica.payment.term">
+            <field name="code">TA0</field>
+            <field name="name">TALONES A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_tb0" model="freematica.payment.term">
+            <field name="code">TB0</field>
+            <field name="name">TRANSFERENCIA BANCARIA A 0 DIAS</field>
+            <field name="days" eval="0"/>
+        </record>
+        <record id="payment_term_tb1" model="freematica.payment.term">
+            <field name="code">TB1</field>
+            <field name="name">TRANSFERENCIA 10 DIAS</field>
+            <field name="days" eval="10"/>
+        </record>
+        <record id="payment_term_tb2" model="freematica.payment.term">
+            <field name="code">TB2</field>
+            <field name="name">TRANSFERENCIA 30 DIES</field>
+            <field name="days" eval="30"/>
+        </record>
+        <record id="payment_term_tb3" model="freematica.payment.term">
+            <field name="code">TB3</field>
+            <field name="name">TRANSFERENCIA 60 DIES</field>
+            <field name="days" eval="60"/>
+        </record>
+        <record id="payment_term_tb4" model="freematica.payment.term">
+            <field name="code">TB4</field>
+            <field name="name">TRANSFERENCIA 90 DIES</field>
+            <field name="days" eval="90"/>
+        </record>
+        <record id="payment_term_tb5" model="freematica.payment.term">
+            <field name="code">TB5</field>
+            <field name="name">TRANSFERENCIA 120 DIES</field>
+            <field name="days" eval="120"/>
+        </record>
+        <record id="payment_term_tb6" model="freematica.payment.term">
+            <field name="code">TB6</field>
+            <field name="name">TRANSFERENCIA 150 DIES</field>
+            <field name="days" eval="150"/>
+        </record>
+        <record id="payment_term_tb7" model="freematica.payment.term">
+            <field name="code">TB7</field>
+            <field name="name">TRANSFERENCIA 240 DIES</field>
+            <field name="days" eval="240"/>
+        </record>
+        <record id="payment_term_tg0" model="freematica.payment.term">
+            <field name="code">TG0</field>
+            <field name="name">TARGETA EMPRESA</field>
+            <field name="days" eval="0"/>
+        </record>
+    </data>
+</odoo>

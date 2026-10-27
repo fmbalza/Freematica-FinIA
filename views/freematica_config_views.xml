@@ -54,6 +54,7 @@
                             <field name="serie_contable_default"/>
                             <field name="contador_documento_listo"/>
                             <field name="fecha_inicio_envio"/>
+                            <field name="regla_vencimiento"/>
                             <field name="grupo_aux_proveedor"/>
                             <field name="concepto_asiento_default"/>
                             <field name="plantilla_normal"/>

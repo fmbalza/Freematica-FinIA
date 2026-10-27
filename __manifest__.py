@@ -1,6 +1,6 @@
 {
     'name': 'FinIA - Freematica',
-    'version': '18.0.1.5.0',
+    'version': '18.0.1.6.0',
     'category': 'Accounting',
     'summary': 'Integración con Freematica (e-Satellite): envío de facturas como asientos contables',
     'description': """
@@ -35,9 +35,11 @@
         'security/ir.model.access.csv',
         'data/ir_cron.xml',
         'data/ir_sequence.xml',
+        'data/freematica_payment_term_data.xml',
         'views/freematica_config_views.xml',
         'views/freematica_provider_views.xml',
         'views/freematica_account_views.xml',
+        'views/freematica_payment_term_views.xml',
         'views/finia_invoice_views.xml',
         'views/finia_ocr_vendor_views.xml',
         'views/menu.xml',

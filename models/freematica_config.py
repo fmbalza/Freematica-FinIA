@@ -96,6 +96,13 @@ class FreematicaConfig(models.Model):
              'día. Las anteriores ya las registró el cliente directamente en Freematica y '
              'enviarlas las duplicaría. Servinet: desde el 23/10/2026.',
     )
+    regla_vencimiento = fields.Selection([
+        ('meses', '30 días = 1 mes (31/07 a 30 días vence el 31/08)'),
+        ('fin_mes', 'A fin del mes resultante'),
+        ('dias', 'Días naturales (31/07 a 30 días vence el 30/08)'),
+    ], string='Cálculo del vencimiento', default='meses', required=True,
+        help='Cómo se cuentan los días de la forma de pago del proveedor (Formas de pago '
+             'Freematica) para la fecha de vencimiento de la Cartera, cuando la factura no la trae.')
     contador_documento_listo = fields.Boolean(
         string='Contador de documento listo',
         help='Activar solo después de fijar en la secuencia "freematica.documento.serie" el '

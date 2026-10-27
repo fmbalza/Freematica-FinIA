@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="freematica_payment_term_view_list" model="ir.ui.view">
+        <field name="name">freematica.payment.term.view.list</field>
+        <field name="model">freematica.payment.term</field>
+        <field name="arch" type="xml">
+            <list editable="bottom">
+                <field name="code"/>
+                <field name="name"/>
+                <field name="days"/>
+                <field name="active" widget="boolean_toggle"/>
+            </list>
+        </field>
+    </record>
+
+    <record id="freematica_payment_term_action" model="ir.actions.act_window">
+        <field name="name">Formas de pago Freematica</field>
+        <field name="res_model">freematica.payment.term</field>
+        <field name="view_mode">list</field>
+        <field name="context">{'active_test': False}</field>
+    </record>
+</odoo>

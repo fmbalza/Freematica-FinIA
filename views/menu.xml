@@ -17,4 +17,10 @@
               parent="finIA_backend.subscription_menu_configuration"
               action="freematica_account_action"
               sequence="52"/>
+
+    <menuitem id="freematica_menu_payment_terms"
+              name="Formas de pago Freematica"
+              parent="finIA_backend.subscription_menu_configuration"
+              action="freematica_payment_term_action"
+              sequence="53"/>
 </odoo>

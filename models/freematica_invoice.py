@@ -8,6 +8,8 @@ import pytz
 from odoo import _, fields, models
 from odoo.exceptions import UserError
 
+from .freematica_payment_term import freematica_fecha_vencimiento
+
 _ROUND = 2
 _FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
 _FREEMATICA_DOC_SEQUENCE = 'freematica.documento.serie'
@@ -213,9 +215,20 @@ class FiniaInvoice(models.Model):
         if localizacion.get('fpago'):
             proveedor_linea['BORRL_FPAGO'] = localizacion['fpago']
             proveedor_linea['BORRL_LOC'] = localizacion['loc']
-        # Cartera obligatoria siempre (Josep Segura/Servinet 2026-10): si la
-        # factura no trae vencimiento se informa la fecha de la factura.
-        fecha_vcto = self.ocr_due_date.strftime('%Y%m%d') if self.ocr_due_date else fecha_doc
+        # Cartera obligatoria siempre (Josep Segura/Servinet 2026-10). El
+        # vencimiento: el que trae la factura; si no, la fecha de factura más
+        # los días de la forma de pago del proveedor (Sonia, 2026-10-27:
+        # 31/07 a 30 días vence el 31/08); sin forma de pago conocida, la
+        # fecha de la factura.
+        fecha_vcto = fecha_doc
+        if self.ocr_due_date:
+            fecha_vcto = self.ocr_due_date.strftime('%Y%m%d')
+        elif localizacion.get('fpago'):
+            forma_pago = self.env['freematica.payment.term'].sudo().search(
+                [('code', '=', localizacion['fpago'])], limit=1)
+            if forma_pago:
+                fecha_vcto = freematica_fecha_vencimiento(
+                    fecha_factura, forma_pago.days, config.regla_vencimiento).strftime('%Y%m%d')
         cartera_entry = {
             'BORRC_TIPOCAR': _TIPOCAR_PROVEEDOR,
             'BORRC_CALEN': calendario,
