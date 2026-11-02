@@ -26,5 +26,18 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+
+        <!-- Empareja con Freematica los proveedores de las facturas pendientes
+             de enviar, para avisar en Finia antes de enviar (ver
+             finia.ocr.vendor._freematica_match_pending). -->
+        <record id="ir_cron_freematica_match_vendors" model="ir.cron">
+            <field name="name">Freematica: emparejar proveedores pendientes</field>
+            <field name="model_id" ref="finIA_backend.model_finia_ocr_vendor"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_freematica_match_pending()</field>
+            <field name="interval_number" eval="15"/>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

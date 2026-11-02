@@ -276,6 +276,16 @@ class FreematicaConfig(models.Model):
         )
 
     @api.model
+    def action_refresh_providers_async(self):
+        """Fuerza una pasada completa del catálogo de proveedores en el
+        próximo ciclo del cron y lo lanza ya (ver refresh del panel de avisos)."""
+        self.ensure_one()
+        self.sudo().write({'providers_sync_next_page': 1, 'providers_last_sync_at': False})
+        cron = self.env.ref('Freematica-FinIA.ir_cron_freematica_sync_providers', raise_if_not_found=False)
+        if cron:
+            cron.sudo()._trigger()
+        return True
+
     def _cron_sync_providers(self):
         configs = self.search([('active', '=', True)])
         for config in configs:
@@ -283,6 +293,8 @@ class FreematicaConfig(models.Model):
                 self.env['freematica.provider'].sync_from_freematica(config, force=False)
             except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
                 _logger.error('Freematica: fallo sincronizando proveedores (config %s): %s', config.id, error)
+        # Con el catálogo al día, reintentar los proveedores sin coincidencia.
+        self.env['finia.ocr.vendor']._freematica_match_pending()
 
     def action_sync_accounts(self):
         self.ensure_one()

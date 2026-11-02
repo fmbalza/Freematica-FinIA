@@ -1,7 +1,11 @@
 # -*- coding: utf-8 -*-
-from odoo import fields, models
+import logging
+
+from odoo import api, fields, models
 
 from ..services import freematica_matching as matching
+
+_logger = logging.getLogger(__name__)
 
 
 class FiniaOcrVendor(models.Model):
@@ -59,7 +63,10 @@ class FiniaOcrVendor(models.Model):
         match_state = 'sin_coincidencia'
         score = 0.0
 
-        normalized_nif = matching.normalize_nif(self.nif)
+        # `nif` es el campo de este módulo (manual o heredado de Freematica);
+        # `vat` es el NIF que lee el OCR. Sin el segundo casi todo dependía
+        # del parecido del nombre.
+        normalized_nif = matching.normalize_nif(self.nif or self.vat)
         if normalized_nif:
             provider = Provider.search([('normalized_nif', '=', normalized_nif)], limit=1)
             if provider:
@@ -90,6 +97,69 @@ class FiniaOcrVendor(models.Model):
                 vals['default_accounting_account'] = provider.cta_gasto
         self.write(vals)
         return self.freematica_provider_id
+
+    def _freematica_pending_invoices_domain(self):
+        """Facturas que se van a enviar a Freematica: procesadas o
+        contabilizadas, no enviadas y recibidas desde el inicio de envíos."""
+        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        domain = [('state', 'in', ('procesado', 'revisado', 'contabilizado', 'irregularidades')),
+                  ('freematica_state', '!=', 'enviado')]
+        if config.fecha_inicio_envio:
+            since = fields.Datetime.to_datetime(config.fecha_inicio_envio)
+            domain += ['|', ('reception_date', '>=', since),
+                       '&', ('reception_date', '=', False), ('create_date', '>=', since)]
+        return domain
+
+    @api.model
+    def _freematica_match_pending(self, retry_unmatched=True):
+        """Empareja con el catálogo de Freematica los proveedores de las
+        facturas pendientes de enviar que aún no lo están, para avisar ANTES
+        de enviar (antes solo se intentaba al pulsar Enviar). Devuelve los
+        proveedores que siguen sin coincidencia."""
+        states = ('no_intentado', 'sin_coincidencia') if retry_unmatched else ('no_intentado',)
+        invoices = self.env['finia.invoice'].sudo().search(self._freematica_pending_invoices_domain())
+        vendors = invoices.mapped('ocr_vendor_id').filtered(
+            lambda v: v.freematica_match_state in states and not v.freematica_cod_aux)
+        for vendor in vendors:
+            try:
+                vendor._freematica_resolve_provider()
+            except Exception as error:  # noqa: BLE001 - un proveedor raro no frena al resto
+                _logger.warning('Freematica: no se pudo emparejar el proveedor %s: %s', vendor.id, error)
+        return vendors.filtered(lambda v: not v.freematica_cod_aux)
+
+    @api.model
+    def _cron_freematica_match_pending(self):
+        self._freematica_match_pending()
+
+    @api.model
+    def freematica_vendor_alerts(self):
+        """Proveedores de facturas pendientes de enviar que no existen (o no
+        se reconocen) en Freematica, con sus facturas: lo que muestra el panel
+        de avisos del frontend."""
+        invoices = self.env['finia.invoice'].sudo().search(
+            self._freematica_pending_invoices_domain() + [('ocr_vendor_id', '!=', False)],
+            order='reception_date desc, id desc')
+        alerts = []
+        for vendor in invoices.mapped('ocr_vendor_id'):
+            if vendor.freematica_cod_aux:
+                continue
+            vendor_invoices = invoices.filtered(lambda i: i.ocr_vendor_id == vendor)
+            alerts.append({
+                'vendor_id': vendor.id,
+                'vendor_name': vendor.name,
+                'nif': vendor.nif or vendor.vat or None,
+                'match_state': vendor.freematica_match_state,
+                'checked_at': vendor.freematica_matched_at and fields.Datetime.to_string(vendor.freematica_matched_at),
+                'invoices': [{
+                    'id': inv.id,
+                    'name': inv.name,
+                    'invoice_number': inv.ocr_invoice_number,
+                    'invoice_date': inv.ocr_invoice_date and fields.Date.to_string(inv.ocr_invoice_date),
+                    'total': inv.ocr_total_amount,
+                    'state': inv.state,
+                } for inv in vendor_invoices],
+            })
+        return alerts
 
     def action_freematica_set_manual_match(self, provider_id):
         self.ensure_one()

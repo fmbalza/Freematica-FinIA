@@ -201,6 +201,9 @@ class FiniaInvoice(models.Model):
             'BORRL_DDIV': 0,
             'BORRL_HDIV': 0,  # se fija al final con la suma del Debe
             'BORRL_TIPOLIN': _TIPOLIN_PROVEEDOR,
+            # Tipo de asociación del documento (Servinet, 2026-11): 1 en la línea
+            # del proveedor, como en sus asientos de factura.
+            'BORRL_TASOC': '1',
             'BORRL_CAL': calendario,
             'BORRL_SER': serie,
             'BORRL_NOMAUX': vendor.name[:200],

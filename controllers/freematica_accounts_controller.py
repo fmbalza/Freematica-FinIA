@@ -355,6 +355,46 @@ class FreematicaAccountsController(http.Controller):
         _recompute_movement_from_lines(movement)
         return json_response({'success': True, 'data': _movement_lines_summary(movement)})
 
+    @http.route('/api/v1/freematica/vendor-alerts', type='http', auth='public', methods=['GET'], csrf=False)
+    def vendor_alerts(self, **kwargs):
+        """GET /api/v1/freematica/vendor-alerts — proveedores de facturas
+        pendientes de enviar que no existen (o no se reconocen) en el catálogo
+        de Freematica, con sus facturas. Lo consulta el panel de avisos."""
+        try:
+            config = request.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+            alerts = request.env['finia.ocr.vendor'].sudo().freematica_vendor_alerts()
+            return json_response({'success': True, 'data': {
+                'vendors': alerts,
+                'invoice_count': sum(len(a['invoices']) for a in alerts),
+                'providers_last_sync_at': config.providers_last_sync_at and str(config.providers_last_sync_at),
+            }})
+        except Exception as error:
+            _logger.error('Freematica vendor-alerts error: %s', error)
+            return json_response({'success': False, 'error': str(error)}, 200)
+
+    @http.route('/api/v1/freematica/providers/refresh', type='http', auth='public', methods=['POST'], csrf=False)
+    def refresh_providers(self, **kwargs):
+        """POST /api/v1/freematica/providers/refresh — pide descargar ya el
+        catálogo de proveedores de Freematica (p. ej. tras dar de alta uno
+        nuevo) y vuelve a emparejar las facturas pendientes con lo que haya.
+        La descarga completa va en segundo plano (cron): por HTTP superaría
+        limit_time_real; al terminar, el cron vuelve a emparejar."""
+        try:
+            config = request.env['freematica.config'].sudo().get_active_config()
+            config.action_refresh_providers_async()
+            Vendor = request.env['finia.ocr.vendor'].sudo()
+            Vendor._freematica_match_pending()
+            alerts = Vendor.freematica_vendor_alerts()
+            return json_response({'success': True, 'data': {
+                'vendors': alerts,
+                'invoice_count': sum(len(a['invoices']) for a in alerts),
+                'providers_last_sync_at': config.providers_last_sync_at and str(config.providers_last_sync_at),
+                'sync_started': True,
+            }})
+        except Exception as error:
+            _logger.error('Freematica providers/refresh error: %s', error)
+            return json_response({'success': False, 'error': str(error)}, 200)
+
     @http.route('/api/v1/invoices/pending-accounting-account', type='http', auth='public', methods=['GET'], csrf=False)
     def pending_accounting_account(self, **kwargs):
         """GET /api/v1/invoices/pending-accounting-account?limit=&offset=
