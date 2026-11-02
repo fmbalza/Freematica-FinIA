@@ -38,6 +38,37 @@ class FiniaOcrVendor(models.Model):
         ('sin_coincidencia', 'Sin coincidencia'),
     ], string='Estado coincidencia Freematica', default='no_intentado', copy=False)
     freematica_matched_at = fields.Datetime(string='Última resolución Freematica', readonly=True)
+    freematica_tipo_impuesto = fields.Selection([
+        ('S0', 'S0 · Soportado interior sujeto no exento (habitual)'),
+        ('S01', 'S01 · Servicios DTOPE sujeta no exenta (NIF N)'),
+        ('S02', 'S02 · Bienes DTOPE sujeta no exenta (NIF N)'),
+        ('S1', 'S1 · Sujeto no exento no deducible'),
+        ('S10', 'S10 · Sujeto no exento con retención de profesionales'),
+        ('S11', 'S11 · Sujeto no exento con retención de alquiler'),
+        ('S12', 'S12 · No sujeto, regla de localización (exterior)'),
+        ('S15', 'S15 · Sujeto no exento ISP (inversión del sujeto pasivo)'),
+        ('S150', 'S150 · Bien de inversión ISP'),
+        ('S19', 'S19 · Soportado normal con retención 19%'),
+        ('S2', 'S2 · Comunitaria servicios (clave I)'),
+        ('S21', 'S21 · Comunitaria bienes (clave A)'),
+        ('S25', 'S25 · Autofactura inversión sujeto pasivo'),
+        ('S3', 'S3 · Importación de bienes'),
+        ('S4', 'S4 · Sujeto exento'),
+        ('S5', 'S5 · Autofactura comunitaria bienes'),
+        ('S6', 'S6 · Autofactura comunitaria servicios'),
+        ('S7', 'S7 · IPSI Ceuta'),
+        ('S70', 'S70 · IPSI Ceuta no sujeto'),
+        ('S71', 'S71 · IGIC'),
+        ('S710', 'S710 · IGIC no sujeto'),
+        ('S8', 'S8 · Bien de inversión'),
+        ('S9', 'S9 · Retención financiera'),
+        ('SP', 'SP · Prorrata'),
+        ('SSUP', 'SSUP · Suplidos'),
+    ], string='Tipo de impuesto Freematica',
+        help='Tipo de impuesto (BORRID_TIMPUES) para las facturas de este proveedor cuando no '
+             'es el habitual: intracomunitarias (S2/S21), inversión del sujeto pasivo (S15), '
+             'importación (S3), no deducible (S1)... Vacío = automático: S0, S4 para bases '
+             'al 0 % y S10 si la factura trae retención de IRPF. Tabla de Servinet, 2026-11.')
     freematica_has_irpf = fields.Boolean(
         string='Facturas con IRPF',
         help='Marcar si este proveedor es un profesional/autónomo sujeto a retención de '

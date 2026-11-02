@@ -103,6 +103,10 @@ class FreematicaConfig(models.Model):
     ], string='Cálculo del vencimiento', default='meses', required=True,
         help='Cómo se cuentan los días de la forma de pago del proveedor (Formas de pago '
              'Freematica) para la fecha de vencimiento de la Cartera, cuando la factura no la trae.')
+    cuenta_irpf = fields.Char(
+        string='Cuenta de retenciones IRPF', default='47510002',
+        help='Cuenta (Haber) de la retención de IRPF en las facturas con retención. '
+             'Servinet: 47510002 "IRPF PROFESSIONALS".')
     contador_documento_listo = fields.Boolean(
         string='Contador de documento listo',
         help='Activar solo después de fijar en la secuencia "freematica.documento.serie" el '

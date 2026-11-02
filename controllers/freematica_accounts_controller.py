@@ -412,7 +412,9 @@ class FreematicaAccountsController(http.Controller):
             domain = [
                 ('state', '=', 'contabilizado'),
                 ('freematica_state', '!=', 'enviado'),
-                ('line_ids.accounting_account', '=', False),
+                '|', ('line_ids.accounting_account', '=', False),
+                # Cuentas del grupo 1 (capital, reservas...): no son de gasto.
+                ('line_ids.accounting_account', '=like', '1%'),
             ]
             total_count = Invoice.search_count(domain)
             invoices = Invoice.search(domain, limit=limit, offset=offset, order='accounting_date desc, id desc')
@@ -459,6 +461,11 @@ class FreematicaAccountsController(http.Controller):
             Account = request.env['freematica.account'].sudo()
 
             def _validate_account(code):
+                if code.startswith('1'):
+                    raise ValueError(
+                        'La cuenta "%s" es del grupo 1 (capital, reservas, deudas a largo plazo): '
+                        'no es una cuenta de gasto. Elige una del grupo 6 (o 2 si es inmovilizado).' % code
+                    )
                 valid = Account.search([
                     ('cod_cta', '=', code), ('cta_activa', '=', True), ('subcuenta', '=', True),
                 ], limit=1)

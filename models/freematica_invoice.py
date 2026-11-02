@@ -12,6 +12,14 @@ from .freematica_payment_term import freematica_fecha_vencimiento
 
 _ROUND = 2
 _FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
+# Tipos de impuesto (BORRID_TIMPUES) de la tabla de Servinet (Josep, 2026-11):
+# S0 = soportado interior sujeto no exento (el habitual), S4 = sujeto exento,
+# S10 = sujeto no exento con retención de profesionales (IRPF). Los casos que
+# la factura no permite deducir (intracomunitarias, ISP, importación...) se
+# fijan por proveedor en finia.ocr.vendor.freematica_tipo_impuesto.
+_TIMPUES_DEFAULT = 'S0'
+_TIMPUES_EXENTO = 'S4'
+_TIMPUES_IRPF = 'S10'
 _FREEMATICA_DOC_SEQUENCE = 'freematica.documento.serie'
 # Tipo de línea (BORRL_TIPOLIN) de la plantilla de factura de proveedor, tal
 # como aparecen en los asientos reales de Servinet (export-asientos, plantilla 30).
@@ -111,6 +119,17 @@ class FiniaInvoice(models.Model):
                     '%s — asigna una categoría de gasto a la línea, o configura la cuenta por '
                     'defecto del proveedor en finia.ocr.vendor.default_accounting_account'
                     % (len(missing_accounts), names[:300])
+                )
+                problem_codes.append('missing_accounting_account')
+            # Una cuenta del grupo 1 (capital, reservas...) nunca es de gasto: se
+            # coló varias veces desde el selector (10000000 "Capital social").
+            wrong_accounts = self.line_ids.filtered(
+                lambda l: l.accounting_account and l.accounting_account.startswith('1'))
+            if wrong_accounts:
+                problems.append(
+                    '%d línea(s) con una cuenta del grupo 1 (%s), que no es de gasto — '
+                    'asigna una cuenta del grupo 6' % (
+                        len(wrong_accounts), ', '.join(sorted(set(wrong_accounts.mapped('accounting_account')))))
                 )
                 problem_codes.append('missing_accounting_account')
 
@@ -274,19 +293,41 @@ class FiniaInvoice(models.Model):
                 'BORRL_REF': reference,
             })
 
-        # Líneas Debe: IVA soportado, agrupadas por tipo (finia.tax.rate)
+        # Retención (IRPF): Finia la guarda en la factura (ocr_retention_*); el
+        # total de la factura ya es base + IVA - retención.
+        retention_type = self.ocr_retention_type
+        retention = round(self.ocr_retention_amount or 0.0, _ROUND)
+        if retention and retention_type != 'irpf':
+            raise UserError(_(
+                'La factura "%s" tiene una retención de tipo "%s": a Freematica solo se envían '
+                'retenciones de IRPF. Revísala antes de enviarla.'
+            ) % (self.display_name, dict(self._fields['ocr_retention_type'].selection).get(retention_type, retention_type)))
+        timpues = vendor.freematica_tipo_impuesto or (_TIMPUES_IRPF if retention else _TIMPUES_DEFAULT)
+
+        # Líneas Debe: IVA soportado, agrupadas por tipo (finia.tax.rate). Las
+        # bases al 0 % van al registro de IVA como exentas (S4), sin cuota.
         by_rate = defaultdict(lambda: {'base': 0.0, 'cuota': 0.0})
         for line in self.line_ids:
             for tax in line.tax_ids:
                 rate = round(tax.rate, 2)
-                if not rate:
-                    continue
                 bucket = by_rate[rate]
                 bucket['base'] += line.subtotal
                 bucket['cuota'] += line.subtotal * (tax.rate / 100.0)
+        base_total = sum(bucket['base'] for bucket in by_rate.values()) or 0.0
         iva_entries = []
         for rate, bucket in by_rate.items():
             cuota = round(bucket['cuota'], _ROUND)
+            if not rate:
+                if bucket['base']:
+                    iva_entries.append({
+                        'BORRID_TIMPUES': vendor.freematica_tipo_impuesto or _TIMPUES_EXENTO,
+                        'BORRID_CPIVA': _FREEMATICA_CPIVA_CODE[0],
+                        'BORRID_BIVA': round(bucket['base'], _ROUND),
+                        'BORRID_PIVA': 0.0,
+                        'BORRID_CUOTA': 0.0,
+                        'BORRID_TOTCUOTA': 0.0,
+                    })
+                continue
             if not cuota:
                 continue
             rate_label = str(int(rate)) if float(rate).is_integer() else str(rate)
@@ -310,13 +351,23 @@ class FiniaInvoice(models.Model):
                 'BORRL_REF': reference,
             })
             iva_entries.append({
-                'BORRID_TIMPUES': 'S0',
+                'BORRID_TIMPUES': timpues,
                 'BORRID_CPIVA': cpiva_code,
                 'BORRID_BIVA': round(bucket['base'], _ROUND),
                 'BORRID_PIVA': rate,
                 'BORRID_CUOTA': cuota,
                 'BORRID_TOTCUOTA': cuota,
             })
+        # Retención en el registro de IVA, repartida por base entre los tipos.
+        if retention and iva_entries:
+            percent = self.ocr_retention_percent or (base_total and round(retention / base_total * 100, 2)) or 0.0
+            remaining = retention
+            for index, entry in enumerate(iva_entries):
+                share = remaining if index == len(iva_entries) - 1 else round(
+                    retention * (entry['BORRID_BIVA'] / base_total) if base_total else 0.0, _ROUND)
+                remaining = round(remaining - share, _ROUND)
+                entry['BORRID_PRET'] = percent
+                entry['BORRID_RETEN'] = share
         # El detalle de IVA va asociado a la línea del proveedor (junto con
         # CARTERA), no a la línea de la cuenta de IVA -- confirmado por
         # Josep Segura/Servinet 2026-09-14: Freematica grababa cabecera y
@@ -330,13 +381,28 @@ class FiniaInvoice(models.Model):
         # en la factura 59: 465,92 vs. 465,91). Una diferencia mayor indica
         # líneas o impuestos mal leídos y no se envía.
         total_debe = round(sum(l['BORRL_DDIV'] for l in lineas), _ROUND)
-        if abs(total_debe - (self.ocr_total_amount or 0.0)) > 0.05:
+        a_pagar = round(total_debe - retention, _ROUND)
+        if abs(a_pagar - (self.ocr_total_amount or 0.0)) > 0.05:
             raise UserError(_(
-                'La suma de bases e IVA (%.2f) no coincide con el total de la factura (%.2f) — '
+                'La suma de bases e IVA%s (%.2f) no coincide con el total de la factura (%.2f) — '
                 'no se envía a Freematica. Revisa las líneas e impuestos de la factura "%s".'
-            ) % (total_debe, self.ocr_total_amount or 0.0, self.display_name))
-        proveedor_linea['BORRL_HDIV'] = total_debe
-        cartera_entry['BORRC_IMPDV'] = total_debe
+            ) % (_(' menos la retención') if retention else '', a_pagar, self.ocr_total_amount or 0.0, self.display_name))
+        proveedor_linea['BORRL_HDIV'] = a_pagar
+        cartera_entry['BORRC_IMPDV'] = a_pagar
+        if retention:
+            # Retención de IRPF: Haber a la cuenta de retenciones de profesionales.
+            lineas.append({
+                'BORRL_CTA': config.cuenta_irpf or '47510002',
+                'BORRL_CONASI': concepto,
+                'BORRL_DESCON': descripcion_base,
+                'BORRL_DIV': currency,
+                'BORRL_DDIV': 0,
+                'BORRL_HDIV': retention,
+                'BORRL_CAL': calendario,
+                'BORRL_SER': serie,
+                'BORRL_FCHDOC': fecha_doc,
+                'BORRL_REF': reference,
+            })
 
         # El nº de documento se asigna al final, ya validado el asiento: un
         # asiento que ni se llega a enviar no debe consumir número.
@@ -346,7 +412,7 @@ class FiniaInvoice(models.Model):
         for cartera_entry in proveedor_linea['CARTERA']:
             cartera_entry['BORRC_DOC'] = doc_number
 
-        plantilla = config.plantilla_irpf if vendor.freematica_has_irpf else config.plantilla_normal
+        plantilla = config.plantilla_irpf if (vendor.freematica_has_irpf or retention) else config.plantilla_normal
         return {
             'BORR_CODEMP': config.x_auth_company,
             'BORR_COD': ('INV%07d' % self.id)[:10],
