@@ -63,6 +63,35 @@ class FreematicaProvider(models.Model):
         for record in self:
             record.normalized_nif = matching.normalize_nif(record.nif)
 
+    def _freematica_api_dict(self):
+        """Ficha resumida para el frontend; {} si no hay proveedor."""
+        if not self:
+            return {}
+        self.ensure_one()
+        return {
+            'id': self.id,
+            'cod_pro': self.cod_pro,
+            'name': self.nombre_pro,
+            'nif': self.nif or None,
+            'poblacion': self.poblacion or None,
+            'cta_contable': self.cta_contable or None,
+        }
+
+    @api.model
+    def freematica_search(self, query, limit=20):
+        """Buscador del catálogo para asignar un proveedor a mano: por código
+        exacto, NIF o nombre (sin acentos ni signos)."""
+        query = (query or '').strip()
+        if not query:
+            return self.browse()
+        domain = ['|', '|', '|',
+                  ('cod_pro', '=', query),
+                  ('nombre_pro', 'ilike', query),
+                  ('normalized_nombre', 'ilike', matching.normalize_name(query) or query),
+                  ('normalized_nif', 'ilike', matching.normalize_nif(query) or query)]
+        exact = self.search([('cod_pro', '=', query)], limit=1)
+        return exact | self.search(domain, limit=limit)
+
     def _freematica_localizacion_pago(self, config):
         """Localización y forma de pago por defecto del proveedor
         (localización 1), para BORRL_FPAGO/BORRL_LOC y la Cartera: Servinet

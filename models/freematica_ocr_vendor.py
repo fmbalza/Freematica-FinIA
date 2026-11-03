@@ -1,11 +1,24 @@
 # -*- coding: utf-8 -*-
 import logging
 
-from odoo import api, fields, models
+from odoo import _, api, fields, models
+from odoo.exceptions import UserError
 
 from ..services import freematica_matching as matching
 
 _logger = logging.getLogger(__name__)
+
+_MATCH_STATES = [
+    ('no_intentado', 'No intentado'),
+    ('coincidencia_nif', 'Coincidencia por NIF'),
+    ('coincidencia_automatica', 'Coincidencia automática (nombre)'),
+    ('coincidencia_manual', 'Coincidencia manual'),
+    ('varios_nif', 'Varios proveedores con el mismo NIF'),
+    ('sin_coincidencia', 'Sin coincidencia'),
+]
+# Estados que se vuelven a intentar automáticamente (al terminar el OCR, en el
+# cron y al actualizar el catálogo). Una asignación manual nunca se toca.
+_RETRY_STATES = ('no_intentado', 'sin_coincidencia', 'varios_nif')
 
 
 class FiniaOcrVendor(models.Model):
@@ -30,13 +43,16 @@ class FiniaOcrVendor(models.Model):
         'freematica.provider', string='Proveedor Freematica', ondelete='set null', copy=False,
     )
     freematica_match_score = fields.Float(string='Score de coincidencia Freematica', readonly=True)
-    freematica_match_state = fields.Selection([
-        ('no_intentado', 'No intentado'),
-        ('coincidencia_nif', 'Coincidencia por NIF'),
-        ('coincidencia_automatica', 'Coincidencia automática (nombre)'),
-        ('coincidencia_manual', 'Coincidencia manual'),
-        ('sin_coincidencia', 'Sin coincidencia'),
-    ], string='Estado coincidencia Freematica', default='no_intentado', copy=False)
+    freematica_match_state = fields.Selection(
+        _MATCH_STATES, string='Estado coincidencia Freematica', default='no_intentado', copy=False)
+    # Lo que había antes de la última asignación manual, para poder deshacerla
+    # desde la propia ficha de la factura (restaurar intercambia ambos).
+    freematica_prev_provider_id = fields.Many2one(
+        'freematica.provider', string='Proveedor Freematica anterior', ondelete='set null', copy=False)
+    freematica_prev_match_state = fields.Selection(
+        _MATCH_STATES, string='Estado coincidencia anterior', copy=False)
+    freematica_prev_cod_aux = fields.Char(string='Código auxiliar anterior', copy=False)
+    freematica_prev_default_account = fields.Char(string='Cuenta por defecto anterior', copy=False)
     freematica_matched_at = fields.Datetime(string='Última resolución Freematica', readonly=True)
     freematica_tipo_impuesto = fields.Selection([
         ('S0', 'S0 · Soportado interior sujeto no exento (habitual)'),
@@ -98,13 +114,19 @@ class FiniaOcrVendor(models.Model):
         # `vat` es el NIF que lee el OCR. Sin el segundo casi todo dependía
         # del parecido del nombre.
         normalized_nif = matching.normalize_nif(self.nif or self.vat)
-        if normalized_nif:
-            provider = Provider.search([('normalized_nif', '=', normalized_nif)], limit=1)
-            if provider:
-                match_state = 'coincidencia_nif'
-                score = 1.0
+        same_nif = Provider.search([('normalized_nif', '=', normalized_nif)]) if normalized_nif else Provider
+        if len(same_nif) == 1:
+            provider = same_nif
+            match_state = 'coincidencia_nif'
+            score = 1.0
+        elif len(same_nif) > 1:
+            # Mismo NIF con varias fichas en Freematica (p. ej. una por
+            # delegación): elegir una a ciegas mandaría las facturas al código
+            # equivocado, así que se deja para que el usuario elija.
+            match_state = 'varios_nif'
+            score = 1.0
 
-        if not provider:
+        if not provider and match_state != 'varios_nif':
             threshold = self.env['freematica.config'].get_active_config().provider_match_threshold
             candidates = [(p.id, p.nombre_pro) for p in Provider.search([]) if p.nombre_pro]
             best_id, best_score = matching.best_match(self.name, candidates, threshold=threshold)
@@ -119,6 +141,10 @@ class FiniaOcrVendor(models.Model):
             'freematica_match_state': match_state,
             'freematica_provider_id': provider.id if provider else False,
         }
+        if match_state == 'varios_nif' and self.freematica_provider_id \
+                and self.freematica_cod_aux == self.freematica_provider_id.cod_pro:
+            # Venía de un emparejamiento automático anterior a esta regla.
+            vals['freematica_cod_aux'] = False
         if provider:
             if not self.freematica_cod_aux:
                 vals['freematica_cod_aux'] = provider.cod_pro
@@ -147,7 +173,7 @@ class FiniaOcrVendor(models.Model):
         facturas pendientes de enviar que aún no lo están, para avisar ANTES
         de enviar (antes solo se intentaba al pulsar Enviar). Devuelve los
         proveedores que siguen sin coincidencia."""
-        states = ('no_intentado', 'sin_coincidencia') if retry_unmatched else ('no_intentado',)
+        states = _RETRY_STATES if retry_unmatched else ('no_intentado',)
         invoices = self.env['finia.invoice'].sudo().search(self._freematica_pending_invoices_domain())
         vendors = invoices.mapped('ocr_vendor_id').filtered(
             lambda v: v.freematica_match_state in states and not v.freematica_cod_aux)
@@ -180,6 +206,8 @@ class FiniaOcrVendor(models.Model):
                 'vendor_name': vendor.name,
                 'nif': vendor.nif or vendor.vat or None,
                 'match_state': vendor.freematica_match_state,
+                'candidates': [p._freematica_api_dict() for p in vendor._freematica_nif_candidates()],
+                'previous_provider': vendor.freematica_prev_provider_id._freematica_api_dict() or None,
                 'checked_at': vendor.freematica_matched_at and fields.Datetime.to_string(vendor.freematica_matched_at),
                 'invoices': [{
                     'id': inv.id,
@@ -192,17 +220,77 @@ class FiniaOcrVendor(models.Model):
             })
         return alerts
 
-    def action_freematica_set_manual_match(self, provider_id):
+    def _freematica_nif_candidates(self):
+        """Fichas de Freematica con el NIF de este proveedor (más de una =
+        hay que elegir)."""
         self.ensure_one()
-        provider = self.env['freematica.provider'].browse(provider_id)
-        vals = {
+        normalized_nif = matching.normalize_nif(self.nif or self.vat)
+        if not normalized_nif:
+            return self.env['freematica.provider']
+        return self.env['freematica.provider'].search([('normalized_nif', '=', normalized_nif)])
+
+    def _freematica_snapshot_vals(self):
+        """Valores actuales como "anteriores", para poder deshacer."""
+        self.ensure_one()
+        return {
+            'freematica_prev_provider_id': self.freematica_provider_id.id,
+            'freematica_prev_match_state': self.freematica_match_state,
+            'freematica_prev_cod_aux': self.freematica_cod_aux,
+            'freematica_prev_default_account': self.default_accounting_account,
+        }
+
+    def action_freematica_set_manual_match(self, provider_id):
+        """Asigna a mano el proveedor de Freematica. Queda fijo (ningún cron lo
+        cambia) y guarda lo anterior para poder restaurarlo."""
+        self.ensure_one()
+        provider = self.env['freematica.provider'].browse(provider_id).exists()
+        if not provider:
+            raise UserError(_('El proveedor de Freematica elegido ya no existe. Actualiza el catálogo.'))
+        vals = self._freematica_snapshot_vals()
+        vals.update({
             'freematica_provider_id': provider.id,
             'freematica_match_state': 'coincidencia_manual',
             'freematica_match_score': 1.0,
             'freematica_matched_at': fields.Datetime.now(),
             'freematica_cod_aux': provider.cod_pro,
-        }
+        })
         if not self.default_accounting_account and provider.cta_gasto:
             vals['default_accounting_account'] = provider.cta_gasto
         self.write(vals)
         return True
+
+    def action_freematica_restore_previous(self):
+        """Deshace la última asignación manual: vuelve al proveedor anterior y
+        el actual pasa a ser el "anterior" (así también se puede rehacer)."""
+        self.ensure_one()
+        if not self.freematica_prev_match_state:
+            raise UserError(_('No hay una asignación anterior que restaurar.'))
+        vals = self._freematica_snapshot_vals()
+        vals.update({
+            'freematica_provider_id': self.freematica_prev_provider_id.id,
+            'freematica_match_state': self.freematica_prev_match_state,
+            'freematica_cod_aux': self.freematica_prev_cod_aux,
+            'default_accounting_account': self.freematica_prev_default_account,
+            'freematica_matched_at': fields.Datetime.now(),
+        })
+        self.write(vals)
+        return True
+
+    def _freematica_api_dict(self):
+        """Proveedor Finia y su ficha de Freematica, para el frontend."""
+        self.ensure_one()
+        return {
+            'vendor_id': self.id,
+            'vendor_name': self.name,
+            'nif': self.nif or self.vat or None,
+            'match_state': self.freematica_match_state,
+            'match_score': self.freematica_match_score,
+            'matched_at': self.freematica_matched_at and fields.Datetime.to_string(self.freematica_matched_at),
+            'cod_aux': self.freematica_cod_aux or None,
+            'provider': self.freematica_provider_id._freematica_api_dict() or None,
+            'previous_provider': self.freematica_prev_provider_id._freematica_api_dict() or None,
+            'previous_match_state': self.freematica_prev_match_state or None,
+            'can_restore': bool(self.freematica_prev_match_state),
+            'candidates': [p._freematica_api_dict() for p in self._freematica_nif_candidates()]
+            if self.freematica_match_state == 'varios_nif' else [],
+        }

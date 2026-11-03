@@ -1,14 +1,20 @@
 # -*- coding: utf-8 -*-
 import calendar
+import logging
 from collections import defaultdict
 from datetime import date, datetime
 
 import pytz
 
-from odoo import _, fields, models
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
+from .freematica_ocr_vendor import _RETRY_STATES
 from .freematica_payment_term import freematica_fecha_vencimiento
+
+_logger = logging.getLogger(__name__)
+# Estados en los que una factura ya tiene proveedor leído y se enviará a Freematica.
+_FREEMATICA_PENDING_STATES = ('procesado', 'revisado', 'contabilizado', 'irregularidades')
 
 _ROUND = 2
 _FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
@@ -52,6 +58,33 @@ class FiniaInvoice(models.Model):
         help='Número correlativo de la serie contable, asignado por Finia la primera vez '
              'que se intenta enviar la factura y reutilizado en los reintentos.',
     )
+
+    # ── Emparejar el proveedor con Freematica en cuanto se conoce ─────────
+    # Antes solo lo hacía el cron (cada 15 min) y el panel avisaba de
+    # proveedores "sin alta" que en realidad sí existían (Servinet, 03/11/2026).
+
+    @api.model_create_multi
+    def create(self, vals_list):
+        records = super().create(vals_list)
+        if any(vals.get('ocr_vendor_id') for vals in vals_list):
+            records._freematica_match_vendors_now()
+        return records
+
+    def write(self, vals):
+        result = super().write(vals)
+        if vals.get('ocr_vendor_id') or vals.get('state') in _FREEMATICA_PENDING_STATES:
+            self._freematica_match_vendors_now()
+        return result
+
+    def _freematica_match_vendors_now(self):
+        vendors = self.mapped('ocr_vendor_id').filtered(
+            lambda v: not v.freematica_cod_aux and v.freematica_match_state in _RETRY_STATES)
+        for vendor in vendors:
+            try:
+                with self.env.cr.savepoint():
+                    vendor.sudo()._freematica_resolve_provider()
+            except Exception as error:  # noqa: BLE001 - nunca debe frenar el guardado de la factura
+                _logger.warning('Freematica: no se pudo emparejar el proveedor %s: %s', vendor.id, error)
 
     def _freematica_check_before_send(self):
         """Junta TODOS los problemas encontrados (en vez de fallar con el
@@ -102,7 +135,15 @@ class FiniaInvoice(models.Model):
         else:
             if vendor.freematica_match_state == 'no_intentado':
                 vendor._freematica_resolve_provider()
-            if not vendor.freematica_cod_aux:
+            if not vendor.freematica_cod_aux and vendor.freematica_match_state == 'varios_nif':
+                codes = ', '.join(vendor._freematica_nif_candidates().mapped('cod_pro'))
+                problems.append(
+                    'el NIF del proveedor "%s" corresponde a varias fichas de Freematica (%s): '
+                    'elige cuál usar en la sección "Proveedor Freematica" de la factura'
+                    % (vendor.name, codes)
+                )
+                problem_codes.append('vendor_ambiguous')
+            elif not vendor.freematica_cod_aux:
                 problems.append(
                     'el proveedor "%s" no tiene código auxiliar de Freematica: ni coincidencia '
                     'automática (sincroniza proveedores desde FinIA - Freematica > '
