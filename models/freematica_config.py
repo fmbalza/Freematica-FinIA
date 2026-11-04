@@ -107,6 +107,31 @@ class FreematicaConfig(models.Model):
         string='Cuenta de retenciones IRPF', default='47510002',
         help='Cuenta (Haber) de la retención de IRPF en las facturas con retención. '
              'Servinet: 47510002 "IRPF PROFESSIONALS".')
+    # ── Albaranes de compra (POST /comp/v2/albaranes-compras) ───────────
+    # Valores fijos confirmados por Josep (Freematica) el 04/11/2026.
+    albaranes_envio_activo = fields.Boolean(
+        string='Enviar albaranes de compra',
+        help='Si está activo, el cron envía a Freematica los albaranes en Excel que cumplan las '
+             'condiciones (fecha, proveedor identificado...). Desactivado no se envía nada '
+             'automáticamente; el botón de envío manual sigue funcionando.')
+    albaranes_fecha_inicio = fields.Date(
+        string='Enviar albaranes con fecha desde', default=lambda self: fields.Date.to_date('2026-10-01'),
+        help='Fecha del albarán a partir de la cual se envían. Servinet: los servicios de '
+             'octubre de 2026 en adelante.')
+    albaranes_delegacion = fields.Char(string='Delegación (ALCC_DELEG)', default='9999')
+    albaranes_cod_documento = fields.Char(string='Código documento (ALCC_CODDOC)', default='2')
+    albaranes_almacen = fields.Char(string='Almacén (ALCL_CODALMACEN)', default='01')
+    albaranes_serie_factura = fields.Char(string='Serie factura (ALCC_SERIEFRA)', default='C0')
+    albaranes_loc_pago = fields.Char(string='Localización pago (ALCC_LOC_PAGO)', default='1')
+    albaranes_divisa = fields.Char(string='Divisa (ALCC_CODDIVISA)', default='EUR')
+    albaranes_lineas_sin_articulo = fields.Selection([
+        ('bloquear', 'No enviar el albarán (avisar)'),
+        ('texto', 'Enviarlas como línea de texto (C6)'),
+    ], string='Líneas sin código de artículo', default='bloquear', required=True,
+        help='Josep: C1 = línea con artículo, C6 = descripción o texto sin artículo. Pendiente '
+             'de confirmar qué hacer con los albaranes que no traen código (Euro-Mort).')
+    articles_last_sync_at = fields.Datetime(string='Última sincronización de artículos', readonly=True)
+
     contador_documento_listo = fields.Boolean(
         string='Contador de documento listo',
         help='Activar solo después de fijar en la secuencia "freematica.documento.serie" el '
@@ -289,6 +314,22 @@ class FreematicaConfig(models.Model):
         if cron:
             cron.sudo()._trigger()
         return True
+
+    def action_sync_articles(self):
+        self.ensure_one()
+        try:
+            count = self.env['freematica.article'].sync_from_freematica(self)
+        except client.FreematicaError as error:
+            raise UserError(error.mensaje) from error
+        return {'type': 'ir.actions.client', 'tag': 'display_notification', 'params': {
+            'title': 'Freematica', 'message': '%d artículos sincronizados.' % count, 'type': 'success'}}
+
+    def _cron_sync_articles(self):
+        for config in self.search([('active', '=', True)]):
+            try:
+                self.env['freematica.article'].sync_from_freematica(config)
+            except Exception as error:  # noqa: BLE001 - un fallo de sync no debe tumbar el cron
+                _logger.error('Freematica: fallo sincronizando artículos (config %s): %s', config.id, error)
 
     def _cron_sync_providers(self):
         configs = self.search([('active', '=', True)])

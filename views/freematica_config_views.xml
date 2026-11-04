@@ -25,6 +25,7 @@
                     <button name="action_renew_token" string="Renovar token (login)" type="object"/>
                     <button name="action_sync_providers" string="Sincronizar proveedores" type="object"/>
                     <button name="action_sync_accounts" string="Sincronizar cuentas" type="object"/>
+                    <button name="action_sync_articles" string="Sincronizar artículos" type="object"/>
                 </header>
                 <sheet>
                     <group>
@@ -85,6 +86,22 @@
                             <field name="accounts_sync_next_page" readonly="1"/>
                             <field name="accounts_sync_count_so_far" readonly="1"/>
                             <field name="accounts_last_sync_error" readonly="1" widget="text"/>
+                        </group>
+                    </group>
+                    <group>
+                        <group string="Albaranes de compra">
+                            <field name="albaranes_envio_activo"/>
+                            <field name="albaranes_fecha_inicio"/>
+                            <field name="albaranes_lineas_sin_articulo"/>
+                            <field name="articles_last_sync_at" readonly="1"/>
+                        </group>
+                        <group string="Valores fijos del albarán (Freematica)">
+                            <field name="albaranes_cod_documento"/>
+                            <field name="albaranes_delegacion"/>
+                            <field name="albaranes_almacen"/>
+                            <field name="albaranes_serie_factura"/>
+                            <field name="albaranes_loc_pago"/>
+                            <field name="albaranes_divisa"/>
                         </group>
                     </group>
                 </sheet>

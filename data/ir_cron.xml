@@ -39,5 +39,26 @@
             <field name="interval_type">minutes</field>
             <field name="active" eval="True"/>
         </record>
+        <!-- Envía a Freematica los albaranes de compra en Excel (si está activo en
+             la configuración). Cada corrida tiene un presupuesto de tiempo. -->
+        <record id="ir_cron_freematica_send_albaranes" model="ir.cron">
+            <field name="name">Freematica: enviar albaranes de compra</field>
+            <field name="model_id" ref="finIA_backend.model_finia_albaran"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_freematica_send_albaranes()</field>
+            <field name="interval_number" eval="15"/>
+            <field name="interval_type">minutes</field>
+            <field name="active" eval="True"/>
+        </record>
+
+        <record id="ir_cron_freematica_sync_articles" model="ir.cron">
+            <field name="name">Freematica: sincronizar artículos</field>
+            <field name="model_id" ref="model_freematica_config"/>
+            <field name="state">code</field>
+            <field name="code">model._cron_sync_articles()</field>
+            <field name="interval_number" eval="6"/>
+            <field name="interval_type">hours</field>
+            <field name="active" eval="True"/>
+        </record>
     </data>
 </odoo>

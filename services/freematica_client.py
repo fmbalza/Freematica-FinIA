@@ -29,6 +29,8 @@ IMPORT_ASIENTOS_PATH = '/pcon/v2/import-asientos'
 EXPORT_ASIENTOS_PATH = '/pcon/v2/export-asientos'
 PROVEEDORES_PATH = '/pgrl/v2/proveedores'
 LOCALIZACIONES_PAGO_PROVEEDORES_PATH = '/pgrl/v2/localizaciones-pago-proveedores'
+ALBARANES_COMPRAS_PATH = '/comp/v2/albaranes-compras'
+ARTICULOS_PATH = '/part/v1/articulos'
 CUENTAS_PATH = '/pcon/v2/cuentas'
 
 # Claves, dentro de una línea de asiento, que representan listas de objetos y
@@ -274,6 +276,28 @@ def get_localizacion_pago_proveedor(config, grupo, cod_pro, localizacion=1, toke
     id_reg = base64.b64encode(('%s__%s__%s' % (grupo, cod_pro, localizacion)).encode()).decode()
     path = '%s/%s' % (LOCALIZACIONES_PAGO_PROVEEDORES_PATH, id_reg)
     return _request(config, 'GET', path, 'localizaciones-pago-proveedores', token=token)
+
+
+def alta_albaran_compra(config, albaran_linea, token=None):
+    """POST /comp/v2/albaranes-compras — da de alta UNA línea de un albarán de
+    compra (VoAlbaranesCompras: cabecera ALCC_* + una línea ALCL_*). Un
+    albarán de N líneas son N llamadas con la misma cabecera (Josep,
+    Freematica, 2026-11-04). Si entra responde 200; si no, 400."""
+    return _request(config, 'POST', ALBARANES_COMPRAS_PATH, 'albaranes-compras',
+                    json_body=albaran_linea, token=token)
+
+
+def list_articulos(config, page=None, items=None, rquery=None, token=None):
+    """GET /part/v1/articulos — catálogo de artículos (COD_ARTICULO,
+    COD_PROVEEDOR, COD_IVA...)."""
+    params = {}
+    if page is not None:
+        params['page'] = page
+    if items is not None:
+        params['items'] = items
+    if rquery:
+        params['rQuery'] = rquery
+    return _request(config, 'GET', ARTICULOS_PATH, 'articulos', params=params, token=token)
 
 
 def list_cuentas(config, page=None, items=None, rquery=None, token=None):

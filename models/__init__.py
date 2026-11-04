@@ -8,3 +8,5 @@ from . import freematica_sendable_mixin
 from . import freematica_invoice
 from . import freematica_ocr_vendor
 from . import freematica_log
+from . import freematica_article
+from . import freematica_albaran
