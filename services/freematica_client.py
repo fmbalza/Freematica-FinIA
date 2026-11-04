@@ -165,6 +165,14 @@ def _request(config, method, path, operation, params=None, json_body=None, token
             'Error de conexión con Freematica (%s): %s' % (operation, error), operation,
         ) from error
 
+    # Freematica responde en UTF-8 sin declarar el charset y requests lo lee
+    # como Latin-1 ("numeraciÃ³n"): se fuerza UTF-8 si el cuerpo lo es.
+    try:
+        response.content.decode('utf-8')
+        response.encoding = 'utf-8'
+    except UnicodeDecodeError:
+        pass
+
     if response.status_code not in (200, 201):
         _logger.error(
             'Freematica %s respondió HTTP %s: %s', operation, response.status_code, response.text[:2000],

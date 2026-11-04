@@ -332,13 +332,29 @@ class FiniaAlbaran(models.Model):
         self._freematica_commit()
         return True
 
+    @api.model
+    def _freematica_known_error_action(self, message, config):
+        """Qué hacer ante los errores de Freematica que ya conocemos."""
+        text = (message or '').lower()
+        if 'contador' in text and 'numeraci' in text:
+            return ('Freematica no tiene numeración configurada para los albaranes de compra (documento %s, '
+                    'delegación %s). Hay que pedir a Freematica que la active; después pulsa "Reintentar".'
+                    % (config.albaranes_cod_documento, config.albaranes_delegacion))
+        if 'articulo' in text or 'artículo' in text:
+            return 'Da de alta en Freematica el artículo que indica el error y pulsa "Reintentar".'
+        if 'proveedor' in text:
+            return 'Revisa en Freematica la ficha del proveedor que indica el error y pulsa "Reintentar".'
+        return None
+
     def _freematica_fail_line(self, index, total, numdoc, message, warnings):
+        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        known = self._freematica_known_error_action(message, config)
         if index == 0:
             problem = 'Freematica rechazó el albarán: %s' % message
-            action = 'Corrige lo que indica el error y pulsa "Reintentar".'
+            action = known or 'Corrige lo que indica el error y pulsa "Reintentar".'
         else:
             problem = 'Freematica rechazó la línea %d de %d: %s' % (index + 1, total, message)
-            action = ('Las %d primeras líneas ya están en Freematica (albarán nº %s). Corrige el error y '
+            action = ((known + ' ') if known else '') + ('Las %d primeras líneas ya están en Freematica (albarán nº %s). Corrige el error y '
                       'pulsa "Reintentar" para continuar desde la línea %d, o borra el albarán nº %s en '
                       'Freematica y pulsa "Reiniciar envío" para enviarlo entero de nuevo.'
                       % (index, numdoc, index + 1, numdoc))
