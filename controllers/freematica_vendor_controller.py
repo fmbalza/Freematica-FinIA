@@ -50,7 +50,7 @@ class FreematicaVendorController(http.Controller):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         try:
-            limit = max(1, min(int(limit or 20), 50))
+            limit = max(1, min(int(limit or 20), 100))
             providers = request.env['freematica.provider'].sudo().freematica_search(q, limit=limit)
             return json_response({'success': True, 'data': [p._freematica_api_dict() for p in providers]})
         except Exception as error:

@@ -96,7 +96,8 @@ class FreematicaProvider(models.Model):
         exacto, NIF o nombre (sin acentos ni signos)."""
         query = (query or '').strip()
         if not query:
-            return self.browse()
+            # Sin texto: lista para elegir directamente (por nombre).
+            return self.search(self._freematica_group_domain(), limit=limit, order='nombre_pro, cod_pro')
         domain = ['|', '|', '|',
                   ('cod_pro', '=', query),
                   ('nombre_pro', 'ilike', query),
