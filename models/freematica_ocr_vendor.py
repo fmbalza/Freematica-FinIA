@@ -114,7 +114,8 @@ class FiniaOcrVendor(models.Model):
         # `vat` es el NIF que lee el OCR. Sin el segundo casi todo dependía
         # del parecido del nombre.
         normalized_nif = matching.normalize_nif(self.nif or self.vat)
-        same_nif = Provider.search([('normalized_nif', '=', normalized_nif)]) if normalized_nif else Provider
+        group = Provider._freematica_group_domain()
+        same_nif = Provider.search([('normalized_nif', '=', normalized_nif)] + group) if normalized_nif else Provider
         if len(same_nif) == 1:
             provider = same_nif
             match_state = 'coincidencia_nif'
@@ -128,7 +129,7 @@ class FiniaOcrVendor(models.Model):
 
         if not provider and match_state != 'varios_nif':
             threshold = self.env['freematica.config'].get_active_config().provider_match_threshold
-            candidates = [(p.id, p.nombre_pro) for p in Provider.search([]) if p.nombre_pro]
+            candidates = [(p.id, p.nombre_pro) for p in Provider.search(group) if p.nombre_pro]
             best_id, best_score = matching.best_match(self.name, candidates, threshold=threshold)
             score = best_score
             if best_id:
@@ -227,7 +228,8 @@ class FiniaOcrVendor(models.Model):
         normalized_nif = matching.normalize_nif(self.nif or self.vat)
         if not normalized_nif:
             return self.env['freematica.provider']
-        return self.env['freematica.provider'].search([('normalized_nif', '=', normalized_nif)])
+        Provider = self.env['freematica.provider']
+        return Provider.search([('normalized_nif', '=', normalized_nif)] + Provider._freematica_group_domain())
 
     def _freematica_snapshot_vals(self):
         """Valores actuales como "anteriores", para poder deshacer."""

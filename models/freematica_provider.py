@@ -28,6 +28,11 @@ class FreematicaProvider(models.Model):
     ]
 
     cod_pro = fields.Char(string='COD_PRO', required=True, index=True)
+    cod_grupo_pro = fields.Integer(
+        string='Grupo de proveedores', index=True,
+        help='COD_GRUPO_PRO de Freematica. Servinet tiene los mismos proveedores dados de alta en '
+             'dos grupos (1 y 2) con códigos distintos; solo vale el grupo configurado para los '
+             'asientos (BORRL_GRUPAUX), así que el emparejamiento solo mira ese grupo.')
     nombre_pro = fields.Char(string='Nombre')
     nif = fields.Char(string='NIF', index=True)
     cta_contable = fields.Char(
@@ -74,8 +79,16 @@ class FreematicaProvider(models.Model):
             'name': self.nombre_pro,
             'nif': self.nif or None,
             'poblacion': self.poblacion or None,
+            'grupo': self.cod_grupo_pro or None,
             'cta_contable': self.cta_contable or None,
         }
+
+    @api.model
+    def _freematica_group_domain(self):
+        """Solo las fichas del grupo de proveedores de los asientos (o sin
+        grupo conocido, hasta la próxima sincronización)."""
+        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        return [('cod_grupo_pro', 'in', (config.grupo_aux_proveedor or 1, 0))]
 
     @api.model
     def freematica_search(self, query, limit=20):
@@ -89,8 +102,9 @@ class FreematicaProvider(models.Model):
                   ('nombre_pro', 'ilike', query),
                   ('normalized_nombre', 'ilike', matching.normalize_name(query) or query),
                   ('normalized_nif', 'ilike', matching.normalize_nif(query) or query)]
-        exact = self.search([('cod_pro', '=', query)], limit=1)
-        return exact | self.search(domain, limit=limit)
+        group = self._freematica_group_domain()
+        exact = self.search([('cod_pro', '=', query)] + group, limit=1)
+        return exact | self.search(domain + group, limit=limit)
 
     def _freematica_localizacion_pago(self, config):
         """Localización y forma de pago por defecto del proveedor
@@ -161,6 +175,7 @@ class FreematicaProvider(models.Model):
                         continue
                     vals = {
                         'cod_pro': cod_pro,
+                        'cod_grupo_pro': int(float(item.get('COD_GRUPO_PRO') or 0)),
                         'nombre_pro': item.get('NOMBRE_PRO'),
                         'nif': item.get('NIF'),
                         'cta_contable': item.get('CTA_CONTABLE'),
