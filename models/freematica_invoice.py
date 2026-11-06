@@ -267,7 +267,8 @@ class FiniaInvoice(models.Model):
             'BORRL_CAL': calendario,
             'BORRL_SER': serie,
             'BORRL_NOMAUX': vendor.name[:200],
-            'BORRL_NIF': (vendor.nif or '')[:15],
+            # NIF de la ficha de Freematica emparejada (o el escrito a mano).
+            'BORRL_NIF': (vendor.nif or vendor.freematica_provider_id.nif or '')[:15],
             'BORRL_FCHDOC': fecha_doc,
             'BORRL_REF': reference,
         }

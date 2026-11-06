@@ -110,10 +110,10 @@ class FiniaOcrVendor(models.Model):
         match_state = 'sin_coincidencia'
         score = 0.0
 
-        # `nif` es el campo de este módulo (manual o heredado de Freematica);
-        # `vat` es el NIF que lee el OCR. Sin el segundo casi todo dependía
-        # del parecido del nombre.
-        normalized_nif = matching.normalize_nif(self.nif or self.vat)
+        # NIF del proveedor: el escrito en este módulo (`nif`, a mano) o el que
+        # lee el OCR (`vat`), descartando el NIF del propio cliente (el OCR a
+        # veces lee el "CIF cliente" de la factura como si fuera del proveedor).
+        normalized_nif = self._freematica_effective_nif()
         group = Provider._freematica_group_domain()
         same_nif = Provider.search([('normalized_nif', '=', normalized_nif)] + group) if normalized_nif else Provider
         if len(same_nif) == 1:
@@ -127,7 +127,11 @@ class FiniaOcrVendor(models.Model):
             match_state = 'varios_nif'
             score = 1.0
 
-        if not provider and match_state != 'varios_nif':
+        # Por nombre SOLO si no hay NIF: si el proveedor trae NIF y no está en
+        # Freematica, es que no está dado de alta (Segre Motors, 06/11/2026: se
+        # emparejó por parecido con Soteras Motor y el asiento fue a otro
+        # proveedor). Queda "Sin coincidencia" para darlo de alta o asignarlo.
+        if not provider and match_state != 'varios_nif' and not normalized_nif:
             threshold = self.env['freematica.config'].get_active_config().provider_match_threshold
             candidates = [(p.id, p.nombre_pro) for p in Provider.search(group) if p.nombre_pro]
             best_id, best_score = matching.best_match(self.name, candidates, threshold=threshold)
@@ -149,8 +153,8 @@ class FiniaOcrVendor(models.Model):
         if provider:
             if not self.freematica_cod_aux:
                 vals['freematica_cod_aux'] = provider.cod_pro
-            if not self.nif and provider.nif:
-                vals['nif'] = provider.nif
+            # El NIF de la ficha nunca se copia: en un emparejamiento por nombre
+            # sería el de OTRA empresa y fijaría el error para siempre.
             if not self.default_accounting_account and provider.cta_gasto:
                 vals['default_accounting_account'] = provider.cta_gasto
         self.write(vals)
@@ -221,11 +225,33 @@ class FiniaOcrVendor(models.Model):
             })
         return alerts
 
+    @api.model
+    def _freematica_own_nifs(self):
+        """NIF del propio cliente (no son de proveedores): parámetro
+        `finia.own_vats` (separados por coma, el mismo que usa el OCR) y los
+        NIF de los administradores dueños de cuenta."""
+        param = self.env['ir.config_parameter'].sudo().get_param('finia.own_vats') or ''
+        nifs = {matching.normalize_nif(v) for v in param.split(',')}
+        owners = self.env['res.partner'].sudo().search([('finia_role', '=', 'admin'), ('vat', '!=', False)])
+        nifs.update(matching.normalize_nif(p.vat) for p in owners)
+        nifs.discard('')
+        return nifs
+
+    def _freematica_effective_nif(self):
+        """NIF normalizado con el que buscar en Freematica ('' si no hay)."""
+        self.ensure_one()
+        own = self._freematica_own_nifs()
+        for value in (self.nif, self.vat):
+            nif = matching.normalize_nif(value)
+            if nif and nif not in own:
+                return nif
+        return ''
+
     def _freematica_nif_candidates(self):
         """Fichas de Freematica con el NIF de este proveedor (más de una =
         hay que elegir)."""
         self.ensure_one()
-        normalized_nif = matching.normalize_nif(self.nif or self.vat)
+        normalized_nif = self._freematica_effective_nif()
         if not normalized_nif:
             return self.env['freematica.provider']
         Provider = self.env['freematica.provider']
@@ -277,6 +303,28 @@ class FiniaOcrVendor(models.Model):
         })
         self.write(vals)
         return True
+
+    def _freematica_needs_review(self):
+        """Emparejado solo por nombre: conviene revisarlo."""
+        self.ensure_one()
+        return self.freematica_match_state == 'coincidencia_automatica'
+
+    def _freematica_settings_dict(self, counts=None):
+        """Fila de Configuración > Proveedores."""
+        self.ensure_one()
+        data = self._freematica_api_dict()
+        tax_labels = dict(self._fields['freematica_tipo_impuesto'].selection)
+        data.update({
+            'ocr_nif': self.vat or None,
+            'default_accounting_account': self.default_accounting_account or None,
+            'tipo_impuesto': self.freematica_tipo_impuesto or None,
+            'tipo_impuesto_label': tax_labels.get(self.freematica_tipo_impuesto) if self.freematica_tipo_impuesto else None,
+            'has_irpf': bool(self.freematica_has_irpf),
+            'needs_review': self._freematica_needs_review(),
+            'pending_invoices': (counts or {}).get(('pending', self.id), 0),
+            'sent_invoices': (counts or {}).get(('sent', self.id), 0),
+        })
+        return data
 
     def _freematica_api_dict(self):
         """Proveedor Finia y su ficha de Freematica, para el frontend."""
