@@ -86,6 +86,28 @@ class FiniaInvoice(models.Model):
             except Exception as error:  # noqa: BLE001 - nunca debe frenar el guardado de la factura
                 _logger.warning('Freematica: no se pudo emparejar el proveedor %s: %s', vendor.id, error)
 
+    @staticmethod
+    def _freematica_line_rates(line):
+        """Tipos de IVA de una línea. Si el OCR no le asignó impuestos pero sí
+        leyó la cuota (FINIA/00307: 34,36 + 3,44 sin impuesto), se deduce el
+        tipo de cuota / base cuando coincide con uno de Freematica (0, 4, 10,
+        21 %); si no coincide, la línea queda sin IVA y el envío se bloquea al
+        no cuadrar el total, como antes."""
+        if line.tax_ids:
+            return [round(tax.rate, 2) for tax in line.tax_ids]
+        base = line.subtotal or 0.0
+        cuota = line.tax_amount or 0.0
+        if not base:
+            return []
+        if abs(cuota) < 0.005:
+            return [0.0]
+        computed = cuota / base * 100.0
+        for rate in sorted(_FREEMATICA_CPIVA_CODE):
+            # Tolerancia de redondeo: medio céntimo de cuota sobre la base.
+            if abs(computed - rate) <= max(0.05, 0.5 / abs(base)):
+                return [float(rate)]
+        return []
+
     def _freematica_check_before_send(self):
         """Junta TODOS los problemas encontrados (en vez de fallar con el
         primero — evita el ciclo de "corrijo uno, reintento, aparece el
@@ -350,11 +372,10 @@ class FiniaInvoice(models.Model):
         # bases al 0 % van al registro de IVA como exentas (S4), sin cuota.
         by_rate = defaultdict(lambda: {'base': 0.0, 'cuota': 0.0})
         for line in self.line_ids:
-            for tax in line.tax_ids:
-                rate = round(tax.rate, 2)
+            for rate in self._freematica_line_rates(line):
                 bucket = by_rate[rate]
                 bucket['base'] += line.subtotal
-                bucket['cuota'] += line.subtotal * (tax.rate / 100.0)
+                bucket['cuota'] += line.subtotal * (rate / 100.0)
         base_total = sum(bucket['base'] for bucket in by_rate.values()) or 0.0
         iva_entries = []
         for rate, bucket in by_rate.items():
