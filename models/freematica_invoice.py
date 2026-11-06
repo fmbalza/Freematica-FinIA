@@ -288,7 +288,10 @@ class FiniaInvoice(models.Model):
             'BORRL_TASOC': '1',
             'BORRL_CAL': calendario,
             'BORRL_SER': serie,
-            'BORRL_NOMAUX': vendor.name[:200],
+            # Nombre de la ficha de Freematica: el OCR a veces lee como proveedor el
+            # nombre del cliente (FINIA/00298: "Serveis de Personal i Neteja" en
+            # una factura de ABAC con el NIF de ABAC).
+            'BORRL_NOMAUX': (vendor.freematica_provider_id.nombre_pro or vendor.name)[:200],
             # NIF de la ficha de Freematica emparejada (o el escrito a mano).
             'BORRL_NIF': (vendor.nif or vendor.freematica_provider_id.nif or '')[:15],
             'BORRL_FCHDOC': fecha_doc,

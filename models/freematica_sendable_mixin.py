@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 import json
+import re
 import logging
 
 from odoo import _, fields, models
@@ -9,6 +10,22 @@ from ..services import freematica_client as client
 
 _logger = logging.getLogger(__name__)
 
+
+
+_CPIVA_NOT_IN_FORCE = re.compile(r'No existe BORRID_CPIVA en vigor para BORRID_PIVA:\s*\[([0-9.,]+)\]')
+
+
+def _explain_freematica_error(message):
+    """Antepone una explicación a los rechazos de Freematica que no dependen
+    de la factura (Servinet, 06/11/2026: sin código de IVA vigente para el
+    0 % y el 10 % en su tabla de porcentajes)."""
+    match = _CPIVA_NOT_IN_FORCE.search(message or '')
+    if match:
+        rate = '%g' % float(match.group(1).replace(',', '.'))
+        return ('Freematica no tiene un código de IVA vigente para el %s %%. La factura está bien: hay '
+                'que darlo de alta (o ampliar su vigencia) en la tabla de porcentajes de IVA de '
+                'Freematica y después volver a pulsar "Enviar a Freematica". Detalle: %s' % (rate, message))
+    return message
 
 class FreematicaSendableMixin(models.AbstractModel):
     """Estado y orquestación de envío a Freematica, común a los modelos que
@@ -108,7 +125,7 @@ class FreematicaSendableMixin(models.AbstractModel):
                 self.display_name, json.dumps(response, ensure_ascii=False, default=str),
             )
         except (client.FreematicaError, UserError) as error:
-            message = getattr(error, 'mensaje', None) or str(error)
+            message = _explain_freematica_error(getattr(error, 'mensaje', None) or str(error))
             self.write({'freematica_state': 'error', 'freematica_error': message})
             self._freematica_log('freematica_error', message)
             return {'success': False, 'error': message, 'error_codes': ['api_error']}
