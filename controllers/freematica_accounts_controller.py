@@ -444,7 +444,9 @@ class FreematicaAccountsController(http.Controller):
           elección explícita confirmada en el frontend).
         - Por línea: {"line_accounts": [{"line_id": 123, "accounting_account": "62900000"}, ...]}
           Escribe cada línea con su propia cuenta; sin default de proveedor
-          (no tiene sentido cuando las cuentas difieren por línea).
+          (no tiene sentido cuando las cuentas difieren por línea). Con
+          {"line_id": 123, "clear": true} la línea queda sin cuenta (para
+          deshacer una asignación desde la ficha de la factura).
 
         En ambos casos valida cada código contra el catálogo real
         (freematica.account) antes de guardar nada. No envía a Freematica —
@@ -481,21 +483,25 @@ class FreematicaAccountsController(http.Controller):
                 for entry in line_accounts:
                     line_id = entry.get('line_id')
                     code = (entry.get('accounting_account') or '').strip()
-                    if not line_id or not code:
+                    if not line_id or (not code and not entry.get('clear')):
                         continue
                     if int(line_id) not in lines_by_id:
                         return json_response({
                             'success': False,
                             'error': 'La línea %s no pertenece a la factura %s.' % (line_id, invoice_id),
                         }, 200)
-                    _validate_account(code)
+                    if code:
+                        _validate_account(code)
 
                 for entry in line_accounts:
                     line_id = entry.get('line_id')
                     code = (entry.get('accounting_account') or '').strip()
-                    if not line_id or not code:
+                    if not line_id:
                         continue
-                    lines_by_id[int(line_id)].write({'accounting_account': code})
+                    if code:
+                        lines_by_id[int(line_id)].write({'accounting_account': code})
+                    elif entry.get('clear'):
+                        lines_by_id[int(line_id)].write({'accounting_account': False})
 
                 return json_response({
                     'success': True,
