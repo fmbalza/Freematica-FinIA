@@ -118,9 +118,16 @@ class FreematicaProvider(models.Model):
             return {}
         self.ensure_one()
         grupo = config.grupo_aux_proveedor or 1
-        response = client.get_localizacion_pago_proveedor(
-            config._as_client_config(), grupo, self.cod_pro, token=config._ensure_valid_token(),
-        )
+        try:
+            response = client.get_localizacion_pago_proveedor(
+                config._as_client_config(), grupo, self.cod_pro, token=config._ensure_valid_token(),
+            )
+        except client.FreematicaError as error:
+            # Proveedor sin localización de pago en Freematica (404, FINIA/00288):
+            # se envía sin forma de pago, como cualquier proveedor sin ella.
+            if str(error.status_code) == '404':
+                return {}
+            raise
         data = response.get('data') if isinstance(response, dict) else None
         if isinstance(data, dict) and isinstance(data.get('items'), list):
             data = data['items'][0] if data['items'] else None

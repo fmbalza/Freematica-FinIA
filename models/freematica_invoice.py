@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import calendar
 import logging
+import re
 from collections import defaultdict
 from datetime import date, datetime
 
@@ -86,6 +87,58 @@ class FiniaInvoice(models.Model):
             except Exception as error:  # noqa: BLE001 - nunca debe frenar el guardado de la factura
                 _logger.warning('Freematica: no se pudo emparejar el proveedor %s: %s', vendor.id, error)
 
+    def _freematica_sent_duplicate(self):
+        """Otra factura del mismo proveedor y mismo número ya enviada a
+        Freematica (FINIA/00287 = FINIA/00255 reenviada como "Fwd: excel")."""
+        self.ensure_one()
+        number = re.sub(r'[^A-Z0-9]', '', (self.ocr_invoice_number or '').upper())
+        if not number or not self.ocr_vendor_id:
+            return self.browse()
+        candidates = self.sudo().search([
+            ('id', '!=', self.id), ('ocr_vendor_id', '=', self.ocr_vendor_id.id),
+            ('freematica_state', '=', 'enviado'),
+        ])
+        year = self.ocr_invoice_date and self.ocr_invoice_date.year
+        # Mismo número y mismo año (hay proveedores que reinician la numeración).
+        return candidates.filtered(
+            lambda inv: re.sub(r'[^A-Z0-9]', '', (inv.ocr_invoice_number or '').upper()) == number
+            and (not year or not inv.ocr_invoice_date or inv.ocr_invoice_date.year == year))[:1]
+
+    def _freematica_header_rates(self, line_by_rate, retention):
+        """Base e IVA por tipo a partir del cuadro de IVA de cabecera que leyó
+        el OCR (ocr_tax_base / ocr_taxes), para cuando las líneas no cuadran.
+        Devuelve None si la cabecera tampoco cuadra con el total o no se puede
+        deducir el reparto sin inventar:
+        - IVA 0 → todo exento;
+        - IVA / base = un tipo válido (4, 10, 21 %) → todo a ese tipo;
+        - si las líneas usan un único tipo distinto de 0, la cuota es de ese
+          tipo y el resto de la base es exenta (p. ej. aranceles + 21 %)."""
+        self.ensure_one()
+        base = round(self.ocr_tax_base or 0.0, _ROUND)
+        iva = round(self.ocr_taxes or 0.0, _ROUND)
+        if not base or abs(base + iva - retention - (self.ocr_total_amount or 0.0)) > 0.05:
+            return None
+        result = defaultdict(lambda: {'base': 0.0, 'cuota': 0.0})
+        if abs(iva) < 0.005:
+            result[0.0] = {'base': base, 'cuota': 0.0}
+            return result
+        for rate in sorted(_FREEMATICA_CPIVA_CODE):
+            if rate and abs(base * rate / 100.0 - iva) <= 0.05:
+                result[float(rate)] = {'base': base, 'cuota': iva}
+                return result
+        nonzero = {rate for rate, bucket in line_by_rate.items() if rate and bucket['base']}
+        if len(nonzero) == 1:
+            rate = nonzero.pop()
+            if int(round(rate)) in _FREEMATICA_CPIVA_CODE:
+                base_rate = round(iva / (rate / 100.0), _ROUND)
+                base_exempt = round(base - base_rate, _ROUND)
+                if base_rate > 0 and base_exempt >= -0.01:
+                    result[float(rate)] = {'base': base_rate, 'cuota': iva}
+                    if base_exempt > 0.005:
+                        result[0.0] = {'base': base_exempt, 'cuota': 0.0}
+                    return result
+        return None
+
     @staticmethod
     def _freematica_line_rates(line):
         """Tipos de IVA de una línea. Si el OCR no le asignó impuestos pero sí
@@ -140,6 +193,14 @@ class FiniaInvoice(models.Model):
         if not self.ocr_invoice_date:
             problems.append('falta la fecha de factura')
             problem_codes.append('missing_invoice_date')
+        duplicate = self._freematica_sent_duplicate()
+        if duplicate:
+            problems.append(
+                'ya se envió a Freematica la factura %s del mismo proveedor con el mismo número (%s): '
+                'esta es un duplicado (p. ej. la misma factura reenviada por correo). Descártala en '
+                'lugar de enviarla' % (duplicate.name, self.ocr_invoice_number)
+            )
+            problem_codes.append('duplicate_sent')
         if not self.accounting_date:
             problems.append('falta la fecha contable')
             problem_codes.append('missing_accounting_date')
@@ -345,6 +406,43 @@ class FiniaInvoice(models.Model):
             bucket['subtotal'] += line.subtotal
             if line.name or line.product_code:
                 bucket['names'].append(line.name or line.product_code)
+
+        # Retención (IRPF): Finia la guarda en la factura (ocr_retention_*); el
+        # total de la factura ya es base + IVA - retención.
+        retention_type = self.ocr_retention_type
+        retention = round(self.ocr_retention_amount or 0.0, _ROUND)
+        if retention and retention_type != 'irpf':
+            raise UserError(_(
+                'La factura "%s" tiene una retención de tipo "%s": a Freematica solo se envían '
+                'retenciones de IRPF. Revísala antes de enviarla.'
+            ) % (self.display_name, dict(self._fields['ocr_retention_type'].selection).get(retention_type, retention_type)))
+        timpues = vendor.freematica_tipo_impuesto or (_TIMPUES_IRPF if retention else _TIMPUES_DEFAULT)
+
+        # IVA soportado, agrupado por tipo (finia.tax.rate). Las bases al 0 %
+        # van al registro de IVA como exentas (S4), sin cuota.
+        by_rate = defaultdict(lambda: {'base': 0.0, 'cuota': 0.0})
+        for line in self.line_ids:
+            for rate in self._freematica_line_rates(line):
+                bucket = by_rate[rate]
+                bucket['base'] += line.subtotal
+                bucket['cuota'] += line.subtotal * (rate / 100.0)
+
+        # Si las líneas no cuadran con el total (facturas largas en las que el
+        # OCR pierde o lee mal líneas o el IVA de algunas), se usa el cuadro de
+        # IVA de cabecera que leyó el OCR (base e IVA), que sí cuadra con el
+        # total. Solo con una única cuenta de gasto, para no inventar el reparto.
+        lines_total = round(sum(b['subtotal'] for b in by_account.values())
+                            + sum(round(b['cuota'], _ROUND) for b in by_rate.values()) - retention, _ROUND)
+        if abs(lines_total - (self.ocr_total_amount or 0.0)) > 0.05:
+            header_rates = self._freematica_header_rates(by_rate, retention)
+            accounts = {account for account in by_account if account}
+            if header_rates and len(accounts) == 1:
+                account = accounts.pop()
+                by_account = {account: {'subtotal': round(self.ocr_tax_base, _ROUND), 'names': []}}
+                by_rate = header_rates
+                _logger.info('Freematica: %s se envía con el cuadro de IVA de cabecera (las líneas suman %.2f, '
+                             'el total es %.2f)', self.display_name, lines_total, self.ocr_total_amount)
+
         for account, bucket in by_account.items():
             lineas.append({
                 'BORRL_CTA': account,
@@ -360,25 +458,7 @@ class FiniaInvoice(models.Model):
                 'BORRL_REF': reference,
             })
 
-        # Retención (IRPF): Finia la guarda en la factura (ocr_retention_*); el
-        # total de la factura ya es base + IVA - retención.
-        retention_type = self.ocr_retention_type
-        retention = round(self.ocr_retention_amount or 0.0, _ROUND)
-        if retention and retention_type != 'irpf':
-            raise UserError(_(
-                'La factura "%s" tiene una retención de tipo "%s": a Freematica solo se envían '
-                'retenciones de IRPF. Revísala antes de enviarla.'
-            ) % (self.display_name, dict(self._fields['ocr_retention_type'].selection).get(retention_type, retention_type)))
-        timpues = vendor.freematica_tipo_impuesto or (_TIMPUES_IRPF if retention else _TIMPUES_DEFAULT)
 
-        # Líneas Debe: IVA soportado, agrupadas por tipo (finia.tax.rate). Las
-        # bases al 0 % van al registro de IVA como exentas (S4), sin cuota.
-        by_rate = defaultdict(lambda: {'base': 0.0, 'cuota': 0.0})
-        for line in self.line_ids:
-            for rate in self._freematica_line_rates(line):
-                bucket = by_rate[rate]
-                bucket['base'] += line.subtotal
-                bucket['cuota'] += line.subtotal * (rate / 100.0)
         base_total = sum(bucket['base'] for bucket in by_rate.values()) or 0.0
         iva_entries = []
         for rate, bucket in by_rate.items():
