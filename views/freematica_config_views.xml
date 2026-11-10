@@ -97,6 +97,7 @@
                         </group>
                         <group string="Valores fijos del albarán (Freematica)">
                             <field name="albaranes_cod_documento"/>
+                            <field name="albaranes_numdoc_propio"/>
                             <field name="albaranes_delegacion"/>
                             <field name="albaranes_almacen"/>
                             <field name="albaranes_serie_factura"/>

@@ -13,5 +13,15 @@
             <field name="padding">0</field>
             <field name="number_increment">1</field>
         </record>
+        <!-- Nº de albarán de compra (ALCC_NUMDOC): lo numera Finia desde 1
+             (Sonia, 10/11/2026: Freematica no tiene albaranes contabilizados). -->
+        <record id="seq_freematica_albaran_numdoc" model="ir.sequence">
+            <field name="name">Freematica: nº de albarán de compra</field>
+            <field name="code">freematica.albaran.numdoc</field>
+            <field name="implementation">no_gap</field>
+            <field name="padding">0</field>
+            <field name="number_next">1</field>
+            <field name="number_increment">1</field>
+        </record>
     </data>
 </odoo>

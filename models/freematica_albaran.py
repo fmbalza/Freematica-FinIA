@@ -6,7 +6,11 @@ Reglas de Josep (Freematica, 04/11/2026):
   se numera en ALCL_NUMLINEA (1, 2, 3...) y ALCL_CODLINEA es C1 si la línea
   tiene artículo y C6 si es solo texto.
 - ALCC_NUMDOC lo pone Freematica (el siguiente suyo): se manda 0 en la
-  primera línea y el resto usa el número que devuelve.
+  primera línea y el resto usa el número que devuelve. 2026-11-10: el contador
+  de Freematica para estos albaranes no tiene numeración ("El contador asociado
+  no dispone de numeración", HTTP 400) y Sonia confirma que no hay albaranes
+  contabilizados, así que Finia los numera desde 1 con su propia secuencia
+  (`freematica.albaran.numdoc`, ajuste "Numerar los albaranes desde Finia").
 - CODDOC 2, DELEG 9999, almacén 01, LOC_PAGO 1, SERIEFRA C0, divisa EUR,
   fechas AAAAMMDD, tipos de IVA como en los asientos.
 - Si entra responde 200 y si no 400. Para corregir uno ya enviado hay que
@@ -34,6 +38,7 @@ _CPIVA_BY_PERCENT = {0: '0', 4: '3', 10: '2', 21: '1'}
 _PERCENT_BY_CPIVA = {code: percent for percent, code in _CPIVA_BY_PERCENT.items()}
 _CODLINEA_ARTICULO = 'C1'
 _CODLINEA_TEXTO = 'C6'
+_FREEMATICA_NUMDOC_SEQUENCE = 'freematica.albaran.numdoc'
 _STALE_SENDING = timedelta(minutes=30)
 _CRON_BUDGET_SECONDS = 60
 _CRON_BATCH = 30
@@ -283,6 +288,10 @@ class FiniaAlbaran(models.Model):
         token = config._ensure_valid_token()
         client_config = config._as_client_config()
         numdoc = self.freematica_numdoc
+        if not numdoc and config.albaranes_numdoc_propio:
+            # Se asigna una sola vez y se guarda: un reintento tras un rechazo
+            # reutiliza el mismo número en vez de dejar un hueco.
+            numdoc = self._freematica_assign_numdoc()
         start = self.freematica_lines_sent if numdoc else 0
         self.write({
             'freematica_state': 'enviando',
@@ -332,6 +341,15 @@ class FiniaAlbaran(models.Model):
         self._freematica_commit()
         return True
 
+    def _freematica_assign_numdoc(self):
+        """Nº de albarán (ALCC_NUMDOC) de la secuencia propia de Finia."""
+        self.ensure_one()
+        number = self.env['ir.sequence'].sudo().next_by_code(_FREEMATICA_NUMDOC_SEQUENCE)
+        if not number:
+            raise UserError(_('No existe la secuencia "%s".') % _FREEMATICA_NUMDOC_SEQUENCE)
+        self.write({'freematica_numdoc': int(number)})
+        return self.freematica_numdoc
+
     @api.model
     def _freematica_known_error_action(self, message, config):
         """Qué hacer ante los errores de Freematica que ya conocemos."""
@@ -377,13 +395,17 @@ class FiniaAlbaran(models.Model):
         """Tras borrar el albarán en Freematica: olvida el número y las líneas
         enviadas para mandarlo entero de nuevo. Queda anotado en el registro
         del albarán (número anterior incluido) por si hay que deshacerlo."""
+        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        keep_numdoc = bool(config and config.albaranes_numdoc_propio)
         for albaran in self:
             if albaran.freematica_state == 'enviando':
                 raise UserError(_('El albarán se está enviando ahora mismo; espera a que termine.'))
             previous = (albaran.freematica_state, albaran.freematica_numdoc, albaran.freematica_lines_sent)
             albaran.write({
                 'freematica_state': 'no_enviado',
-                'freematica_numdoc': 0,
+                # Numerado por Finia: se conserva el nº (el albarán borrado en
+                # Freematica libera el suyo) para no dejar hueco en la secuencia.
+                'freematica_numdoc': albaran.freematica_numdoc if keep_numdoc else 0,
                 'freematica_lines_sent': 0,
                 'freematica_sent_at': False,
                 'freematica_error': False,
