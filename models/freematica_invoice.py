@@ -24,6 +24,8 @@ _FREEMATICA_CPIVA_CODE = {0: '0', 4: '3', 10: '2', 21: '1'}
 # S10 = sujeto no exento con retención de profesionales (IRPF). Los casos que
 # la factura no permite deducir (intracomunitarias, ISP, importación...) se
 # fijan por proveedor en finia.ocr.vendor.freematica_tipo_impuesto.
+# Porcentajes habituales de IRPF (profesionales 7/15 %, alquileres 19 %, etc.)
+_IRPF_TYPICAL_PERCENTS = (1.0, 2.0, 7.0, 15.0, 19.0)
 _TIMPUES_DEFAULT = 'S0'
 _TIMPUES_EXENTO = 'S4'
 _TIMPUES_IRPF = 'S10'
@@ -434,6 +436,24 @@ class FiniaInvoice(models.Model):
         lines_total = round(sum(b['subtotal'] for b in by_account.values())
                             + sum(round(b['cuota'], _ROUND) for b in by_rate.values()) - retention, _ROUND)
         if abs(lines_total - (self.ocr_total_amount or 0.0)) > 0.05:
+            # Sin retención guardada, un total por debajo de las líneas que
+            # equivale a un % típico de IRPF sobre la base es un IRPF que el
+            # OCR no leyó (FINIA/00254: 218,75 + 21 % - 32,81 = 231,88). El
+            # cuadro de cabecera lo repartiría mal (IVA neto de IRPF como
+            # cuota y el resto exento), así que no se envía.
+            lines_base = sum(b['subtotal'] for b in by_account.values())
+            gap = round(lines_total - (self.ocr_total_amount or 0.0), _ROUND)
+            if not retention and lines_base > 0 and gap > 0.05:
+                gap_percent = gap / lines_base * 100.0
+                if any(abs(gap_percent - irpf) <= 0.1 for irpf in _IRPF_TYPICAL_PERCENTS):
+                    raise UserError(_(
+                        'La factura "%(name)s" parece tener una retención de IRPF del %(percent)s %% '
+                        '(%(gap).2f) sin registrar: las líneas suman %(lines).2f y el total es %(total).2f. '
+                        'Indica la retención en la factura (tipo, porcentaje e importe) antes de enviarla.'
+                    ) % {
+                        'name': self.display_name, 'percent': round(gap_percent), 'gap': gap,
+                        'lines': lines_total, 'total': self.ocr_total_amount or 0.0,
+                    })
             header_rates = self._freematica_header_rates(by_rate, retention)
             accounts = {account for account in by_account if account}
             if header_rates and len(accounts) == 1:
