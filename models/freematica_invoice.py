@@ -328,7 +328,12 @@ class FiniaInvoice(models.Model):
         calendario = str(fecha_registro.year)
         concepto = config.concepto_asiento_default or 'FACT'
         # Mismo formato que los asientos que registra Servinet a mano.
-        descripcion_base = ('Su Fra. %s %s' % (reference, vendor.name))[:40]
+        # El nombre y el NIF salen de la ficha de Freematica asignada (si la hay): el
+        # proveedor de Finia puede ser otro (Sonia cambia la ficha a mano en el
+        # proveedor, y su nombre/NIF quedaban los antiguos: FINIA/00252).
+        ficha = vendor.freematica_provider_id
+        nombre_asiento = ' '.join((ficha.nombre_pro or '').split()) or vendor.name
+        descripcion_base = ('Su Fra. %s %s' % (reference, nombre_asiento))[:40]
         localizacion = vendor.freematica_provider_id._freematica_localizacion_pago(config)
 
         lineas = []
@@ -356,7 +361,7 @@ class FiniaInvoice(models.Model):
             # una factura de ABAC con el NIF de ABAC).
             'BORRL_NOMAUX': (vendor.freematica_provider_id.nombre_pro or vendor.name)[:200],
             # NIF de la ficha de Freematica emparejada (o el escrito a mano).
-            'BORRL_NIF': (vendor.nif or vendor.freematica_provider_id.nif or '')[:15],
+            'BORRL_NIF': (ficha.nif or vendor.nif or '')[:15],
             'BORRL_FCHDOC': fecha_doc,
             'BORRL_REF': reference,
         }
