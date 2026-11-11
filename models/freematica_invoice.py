@@ -106,6 +106,31 @@ class FiniaInvoice(models.Model):
             lambda inv: re.sub(r'[^A-Z0-9]', '', (inv.ocr_invoice_number or '').upper()) == number
             and (not year or not inv.ocr_invoice_date or inv.ocr_invoice_date.year == year))[:1]
 
+    @staticmethod
+    def _freematica_descripcion_gasto(reference, nombre, textos, descripcion_base, limite=40):
+        """Descripción de la línea de gasto: 'Su Fra. <nº> <proveedor> <texto de línea>'.
+
+        BORRL_DESCON admite 40 caracteres. El texto de las líneas de la factura
+        (p. ej. la matrícula que se añade en Finia) tiene prioridad: si no cabe
+        todo, se acorta primero el nombre del proveedor y, solo si hace falta,
+        el texto. Sin texto de línea, queda la descripción base de siempre.
+        """
+        extra = ' '.join(' '.join(dict.fromkeys(' '.join((t or '').split()) for t in textos if t)).split())
+        if not extra:
+            return descripcion_base
+        prefijo = 'Su Fra. %s' % reference
+        disponible = limite - len(prefijo) - 1
+        if disponible <= 0:
+            return prefijo[:limite]
+        if len(extra) >= disponible:
+            return ('%s %s' % (prefijo, extra[:disponible])).strip()
+        nombre_disp = disponible - len(extra) - 1
+        partes = [prefijo]
+        if nombre_disp > 0:
+            partes.append(nombre[:nombre_disp].rstrip())
+        partes.append(extra)
+        return ' '.join(p for p in partes if p)[:limite]
+
     def _freematica_header_rates(self, line_by_rate, retention):
         """Base e IVA por tipo a partir del cuadro de IVA de cabecera que leyó
         el OCR (ocr_tax_base / ocr_taxes), para cuando las líneas no cuadran.
@@ -472,7 +497,8 @@ class FiniaInvoice(models.Model):
             lineas.append({
                 'BORRL_CTA': account,
                 'BORRL_CONASI': concepto,
-                'BORRL_DESCON': descripcion_base,
+                'BORRL_DESCON': self._freematica_descripcion_gasto(
+                    reference, nombre_asiento, bucket['names'], descripcion_base),
                 'BORRL_DIV': currency,
                 'BORRL_DDIV': round(bucket['subtotal'], _ROUND),
                 'BORRL_HDIV': 0,
