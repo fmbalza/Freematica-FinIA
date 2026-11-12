@@ -7,9 +7,11 @@ from . import freematica_account
 from . import freematica_payment_term
 from . import freematica_sendable_mixin
 from . import freematica_invoice
+from . import freematica_vendor_link
 from . import freematica_ocr_vendor
 from . import freematica_log
 from . import freematica_article
 from . import freematica_albaran
 from . import freematica_n43_export
 from . import freematica_bank_connection
+from . import freematica_invoice_line

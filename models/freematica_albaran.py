@@ -120,6 +120,7 @@ class FiniaAlbaran(models.Model):
         impiden enviar; los avisos no (p. ej. artículo que no existe en
         Freematica: el alta entra, pero fallará al facturar)."""
         self.ensure_one()
+        self = self.with_context(freematica_config_id=config.id) if config else self
         problems, codes, actions, warnings = [], [], [], []
 
         def add(code, problem, action):
@@ -275,6 +276,7 @@ class FiniaAlbaran(models.Model):
         """Envía (o continúa enviando) este albarán. Devuelve True si quedó
         enviado. Nunca lanza: los fallos quedan en el propio albarán."""
         self.ensure_one()
+        self = self.with_context(freematica_config_id=config.id) if config else self
         if self.freematica_state == 'enviado':
             return True
         if self.freematica_state == 'enviando' and self.freematica_last_attempt_at \

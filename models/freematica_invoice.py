@@ -80,9 +80,10 @@ class FiniaInvoice(models.Model):
         return result
 
     def _freematica_match_vendors_now(self):
-        vendors = self.mapped('ocr_vendor_id').filtered(
-            lambda v: not v.freematica_cod_aux and v.freematica_match_state in _RETRY_STATES)
-        for vendor in vendors:
+        for invoice in self:
+            vendor = invoice._freematica_with_config().ocr_vendor_id
+            if not vendor or vendor.freematica_cod_aux or vendor.freematica_match_state not in _RETRY_STATES:
+                continue
             try:
                 with self.env.cr.savepoint():
                     vendor.sudo()._freematica_resolve_provider()
@@ -187,6 +188,7 @@ class FiniaInvoice(models.Model):
         y la lista paralela de códigos máquina, para que el frontend sepa
         exactamente qué modal/acción mostrar sin parsear texto."""
         self.ensure_one()
+        self = self._freematica_with_config()
         problems = []
         problem_codes = []
 

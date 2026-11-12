@@ -81,6 +81,17 @@ class FreematicaSendableMixin(models.AbstractModel):
             vals['invoice_id'] = self.id
         self.env['finia.log'].sudo().create(vals)
 
+    def _freematica_with_config(self):
+        """El registro con el contexto de su configuración de Freematica (la de
+        su empresa), para que los campos del proveedor sean los de esa empresa.
+        Sin configuración devuelve el mismo registro (el error lo dará el envío)."""
+        self.ensure_one()
+        try:
+            config = self.env['freematica.config'].sudo().get_config_for(getattr(self, 'empresa_id', False))
+        except UserError:
+            return self
+        return self.with_context(freematica_config_id=config.id)
+
     def _freematica_send_one(self):
         """Envía un único registro a Freematica. No usa `self.ensure_one()`
         como guardia de lote (se llama registro por registro desde el
@@ -88,6 +99,7 @@ class FreematicaSendableMixin(models.AbstractModel):
         nunca lanza, para que un fallo no tumbe el resto de un envío
         múltiple."""
         self.ensure_one()
+        self = self._freematica_with_config()
         problems, problem_codes = self._freematica_check_before_send()
         if problems:
             message = _(
