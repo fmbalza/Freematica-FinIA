@@ -108,6 +108,14 @@ def _recompute_movement_from_lines(movement):
     movement.write({'category': category, 'reconciliation_state': reconciliation_state})
 
 
+
+def _request_config(kwargs):
+    """Configuración de Freematica de la petición: la de `empresa_id` (empresa
+    activa del front) o, sin él, la más antigua (Servinet)."""
+    Config = request.env['freematica.config'].sudo()
+    empresa_id = kwargs.get('empresa_id')
+    return Config.get_config_for(int(empresa_id)) if empresa_id else Config._current()
+
 class FreematicaAccountsController(http.Controller):
 
     @http.route([
@@ -362,8 +370,8 @@ class FreematicaAccountsController(http.Controller):
         pendientes de enviar que no existen (o no se reconocen) en el catálogo
         de Freematica, con sus facturas. Lo consulta el panel de avisos."""
         try:
-            config = request.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
-            alerts = request.env['finia.ocr.vendor'].sudo().freematica_vendor_alerts()
+            config = _request_config(kwargs)
+            alerts = request.env['finia.ocr.vendor'].sudo().freematica_vendor_alerts(config)
             return json_response({'success': True, 'data': {
                 'vendors': alerts,
                 'invoice_count': sum(len(a['invoices']) for a in alerts),
@@ -381,11 +389,11 @@ class FreematicaAccountsController(http.Controller):
         La descarga completa va en segundo plano (cron): por HTTP superaría
         limit_time_real; al terminar, el cron vuelve a emparejar."""
         try:
-            config = request.env['freematica.config'].sudo().get_active_config()
+            config = _request_config(kwargs)
             config.action_refresh_providers_async()
             Vendor = request.env['finia.ocr.vendor'].sudo()
-            Vendor._freematica_match_pending()
-            alerts = Vendor.freematica_vendor_alerts()
+            Vendor._freematica_match_pending(config=config)
+            alerts = Vendor.freematica_vendor_alerts(config)
             return json_response({'success': True, 'data': {
                 'vendors': alerts,
                 'invoice_count': sum(len(a['invoices']) for a in alerts),

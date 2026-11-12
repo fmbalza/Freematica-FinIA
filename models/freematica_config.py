@@ -242,6 +242,17 @@ class FreematicaConfig(models.Model):
         return configs[:1]
 
     @api.model
+    def _current(self):
+        """Configuración "en curso": la del contexto (`freematica_config_id`, que
+        ponen los flujos de factura/albarán/endpoints) o, sin contexto, la más antigua."""
+        config_id = self.env.context.get('freematica_config_id')
+        if config_id:
+            config = self.sudo().browse(config_id).exists()
+            if config:
+                return config
+        return self.sudo().get_config_for(None)
+
+    @api.model
     def get_active_config(self):
         """Configuración por defecto (la más antigua): para los sitios que aún no
         saben de qué empresa son. Preferir `get_config_for(empresa)`."""

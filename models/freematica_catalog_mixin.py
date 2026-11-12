@@ -18,7 +18,7 @@ class FreematicaCatalogMixin(models.AbstractModel):
     def _freematica_scoped(self, config=None):
         """El modelo acotado a una configuración: todo `search`/`search_count`
         posterior solo ve su catálogo. Sin config, la de por defecto."""
-        config = config or self.env['freematica.config'].get_config_for(None)
+        config = config or self.env['freematica.config']._current()
         return self.with_context(freematica_config_id=config.id)
 
     @api.model

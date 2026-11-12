@@ -27,6 +27,14 @@ def _body():
         return {}
 
 
+def _config(kwargs):
+    """Configuración de Freematica de la petición: la de `empresa_id` (la empresa
+    que el front tiene activa) o, sin él, la más antigua (Servinet)."""
+    Config = request.env['freematica.config'].sudo()
+    empresa_id = kwargs.get('empresa_id')
+    return Config.get_config_for(int(empresa_id)) if empresa_id else Config._current()
+
+
 def _error(message):
     return json_response({'success': False, 'error': message}, 200)
 
@@ -38,7 +46,7 @@ def _invoice_vendor(invoice_id):
     if not invoice.ocr_vendor_id:
         raise UserError('La factura no tiene proveedor leído por el OCR: corrígelo antes de elegir '
                         'su ficha de Freematica.')
-    return invoice.ocr_vendor_id
+    return invoice._freematica_with_config().ocr_vendor_id
 
 
 class FreematicaVendorController(http.Controller):
@@ -51,7 +59,9 @@ class FreematicaVendorController(http.Controller):
             return cors_preflight_response()
         try:
             limit = max(1, min(int(limit or 20), 100))
-            providers = request.env['freematica.provider'].sudo().freematica_search(q, limit=limit)
+            config = _config(kwargs)
+            providers = request.env['freematica.provider'].sudo().with_context(
+                freematica_config_id=config.id).freematica_search(q, limit=limit)
             return json_response({'success': True, 'data': [p._freematica_api_dict() for p in providers]})
         except Exception as error:
             _logger.error('Freematica providers/search error: %s', error)
@@ -104,7 +114,9 @@ class FreematicaVendorController(http.Controller):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         try:
-            vendor = request.env['finia.ocr.vendor'].sudo().browse(vendor_id).exists()
+            config = _config(kwargs)
+            vendor = request.env['finia.ocr.vendor'].sudo().with_context(
+                freematica_config_id=config.id).browse(vendor_id).exists()
             if not vendor:
                 return _error('El proveedor no existe.')
             body = _body()
@@ -132,7 +144,7 @@ _VENDOR_FILTERS = {
 _EDITABLE = ('default_accounting_account', 'freematica_tipo_impuesto', 'freematica_has_irpf')
 
 
-def _invoice_counts(vendor_ids):
+def _invoice_counts(vendor_ids, config=None):
     """{('pending'|'sent', vendor_id): nº de facturas}."""
     counts = {}
     if not vendor_ids:
@@ -143,7 +155,7 @@ def _invoice_counts(vendor_ids):
     for vendor, count in sent:
         counts[('sent', vendor.id)] = count
     pending = Invoice._read_group(
-        request.env['finia.ocr.vendor'].sudo()._freematica_pending_invoices_domain()
+        request.env['finia.ocr.vendor'].sudo()._freematica_pending_invoices_domain(config)
         + [('ocr_vendor_id', 'in', vendor_ids)], ['ocr_vendor_id'], ['__count'])
     for vendor, count in pending:
         counts[('pending', vendor.id)] = count
@@ -160,7 +172,8 @@ class FreematicaVendorSettingsController(http.Controller):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         try:
-            Vendor = request.env['finia.ocr.vendor'].sudo()
+            config = _config(kwargs)
+            Vendor = request.env['finia.ocr.vendor'].sudo().with_context(freematica_config_id=config.id)
             limit = max(1, min(int(limit or 50), 200))
             offset = max(0, int(offset or 0))
             base = []
@@ -171,7 +184,7 @@ class FreematicaVendorSettingsController(http.Controller):
             domain = base + _VENDOR_FILTERS.get(filter, [])
             total = Vendor.search_count(domain)
             vendors = Vendor.search(domain, order='name, id', limit=limit, offset=offset)
-            counts = _invoice_counts(vendors.ids)
+            counts = _invoice_counts(vendors.ids, config)
             return json_response({'success': True, 'data': {
                 'vendors': [v._freematica_settings_dict(counts) for v in vendors],
                 'total': total,
@@ -192,7 +205,9 @@ class FreematicaVendorSettingsController(http.Controller):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         try:
-            vendor = request.env['finia.ocr.vendor'].sudo().browse(vendor_id).exists()
+            config = _config(kwargs)
+            vendor = request.env['finia.ocr.vendor'].sudo().with_context(
+                freematica_config_id=config.id).browse(vendor_id).exists()
             if not vendor:
                 return _error('El proveedor no existe.')
             body = _body()
@@ -202,7 +217,7 @@ class FreematicaVendorSettingsController(http.Controller):
                 if code:
                     if code.startswith('1'):
                         return _error('La cuenta "%s" es del grupo 1: no es una cuenta de gasto.' % code)
-                    exists = request.env['freematica.account'].sudo()._freematica_scoped().search(
+                    exists = request.env['freematica.account'].sudo()._freematica_scoped(config).search(
                         [('cod_cta', '=', code), ('cta_activa', '=', True), ('subcuenta', '=', True)], limit=1)
                     if not exists:
                         return _error('La cuenta "%s" no existe en el plan de cuentas de Freematica.' % code)
@@ -221,7 +236,7 @@ class FreematicaVendorSettingsController(http.Controller):
             vendor.write(vals)
             _logger.info('Proveedor %s actualizado desde Configuración: %s (antes %s)', vendor.id, vals, previous)
             return json_response({'success': True, 'data': {
-                'vendor': vendor._freematica_settings_dict(_invoice_counts(vendor.ids)),
+                'vendor': vendor._freematica_settings_dict(_invoice_counts(vendor.ids, config)),
                 'previous': {key: (value if value is not False else None) for key, value in previous.items()},
             }})
         except Exception as error:

@@ -88,7 +88,7 @@ class FreematicaProvider(models.Model):
     def _freematica_group_domain(self, config=None):
         """Solo las fichas de la configuración, del grupo de proveedores de los
         asientos (o sin grupo conocido, hasta la próxima sincronización)."""
-        config = config or self.env['freematica.config'].sudo().get_config_for(None)
+        config = config or self.env['freematica.config']._current()
         return [('config_id', '=', config.id),
                 ('cod_grupo_pro', 'in', (config.grupo_aux_proveedor or 1, 0))]
 

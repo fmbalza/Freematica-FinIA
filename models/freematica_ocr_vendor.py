@@ -5,6 +5,7 @@ from odoo import _, api, fields, models
 from odoo.exceptions import UserError
 
 from ..services import freematica_matching as matching
+from .freematica_vendor_link import TAX_TYPES
 
 _logger = logging.getLogger(__name__)
 
@@ -31,68 +32,140 @@ class FiniaOcrVendor(models.Model):
              'autocompleta desde el proveedor Freematica matcheado si estaba vacío. Usado '
              'como BORRL_NIF al enviar facturas de este proveedor a Freematica.',
     )
+    # ── Campos por empresa de Freematica ────────────────────────────────
+    # Se guardan en freematica.vendor.link (uno por configuración) y aquí se
+    # exponen los de la configuración en curso (contexto `freematica_config_id`;
+    # sin él, la más antigua). Así el resto del código lee y escribe
+    # `vendor.freematica_cod_aux` etc. sin saber de empresas: quien conoce la
+    # empresa (factura, albarán, endpoint) fija el contexto.
+    freematica_link_ids = fields.One2many('freematica.vendor.link', 'vendor_id', string='Vínculos Freematica')
     freematica_cod_aux = fields.Char(
-        string='Código auxiliar Freematica',
+        string='Código auxiliar Freematica', compute='_compute_freematica_link', inverse='_inverse_freematica_link',
+        search='_search_freematica_cod_aux',
         help='Código auxiliar (BORRL_CODAUX) que identifica a este proveedor dentro de '
              'Freematica. Se autocompleta desde freematica_provider_id.cod_pro al '
              'matchear (por NIF o por nombre); si se edita a mano, esa edición manual '
              'nunca se pisa. Obligatorio para poder enviar sus facturas como asiento '
-             'contable.',
-    )
+             'contable. Por empresa de Freematica.')
     freematica_provider_id = fields.Many2one(
-        'freematica.provider', string='Proveedor Freematica', ondelete='set null', copy=False,
-    )
-    freematica_match_score = fields.Float(string='Score de coincidencia Freematica', readonly=True)
+        'freematica.provider', string='Proveedor Freematica',
+        compute='_compute_freematica_link', inverse='_inverse_freematica_link')
+    freematica_match_score = fields.Float(
+        string='Score de coincidencia Freematica', compute='_compute_freematica_link',
+        inverse='_inverse_freematica_link')
     freematica_match_state = fields.Selection(
-        _MATCH_STATES, string='Estado coincidencia Freematica', default='no_intentado', copy=False)
+        _MATCH_STATES, string='Estado coincidencia Freematica', compute='_compute_freematica_link',
+        inverse='_inverse_freematica_link', search='_search_freematica_match_state')
     # Lo que había antes de la última asignación manual, para poder deshacerla
     # desde la propia ficha de la factura (restaurar intercambia ambos).
     freematica_prev_provider_id = fields.Many2one(
-        'freematica.provider', string='Proveedor Freematica anterior', ondelete='set null', copy=False)
+        'freematica.provider', string='Proveedor Freematica anterior',
+        compute='_compute_freematica_link', inverse='_inverse_freematica_link')
     freematica_prev_match_state = fields.Selection(
-        _MATCH_STATES, string='Estado coincidencia anterior', copy=False)
-    freematica_prev_cod_aux = fields.Char(string='Código auxiliar anterior', copy=False)
-    freematica_prev_default_account = fields.Char(string='Cuenta por defecto anterior', copy=False)
-    freematica_matched_at = fields.Datetime(string='Última resolución Freematica', readonly=True)
-    freematica_tipo_impuesto = fields.Selection([
-        ('S0', 'S0 · Soportado interior sujeto no exento (habitual)'),
-        ('S01', 'S01 · Servicios DTOPE sujeta no exenta (NIF N)'),
-        ('S02', 'S02 · Bienes DTOPE sujeta no exenta (NIF N)'),
-        ('S1', 'S1 · Sujeto no exento no deducible'),
-        ('S10', 'S10 · Sujeto no exento con retención de profesionales'),
-        ('S11', 'S11 · Sujeto no exento con retención de alquiler'),
-        ('S12', 'S12 · No sujeto, regla de localización (exterior)'),
-        ('S15', 'S15 · Sujeto no exento ISP (inversión del sujeto pasivo)'),
-        ('S150', 'S150 · Bien de inversión ISP'),
-        ('S19', 'S19 · Soportado normal con retención 19%'),
-        ('S2', 'S2 · Comunitaria servicios (clave I)'),
-        ('S21', 'S21 · Comunitaria bienes (clave A)'),
-        ('S25', 'S25 · Autofactura inversión sujeto pasivo'),
-        ('S3', 'S3 · Importación de bienes'),
-        ('S4', 'S4 · Sujeto exento'),
-        ('S5', 'S5 · Autofactura comunitaria bienes'),
-        ('S6', 'S6 · Autofactura comunitaria servicios'),
-        ('S7', 'S7 · IPSI Ceuta'),
-        ('S70', 'S70 · IPSI Ceuta no sujeto'),
-        ('S71', 'S71 · IGIC'),
-        ('S710', 'S710 · IGIC no sujeto'),
-        ('S8', 'S8 · Bien de inversión'),
-        ('S9', 'S9 · Retención financiera'),
-        ('SP', 'SP · Prorrata'),
-        ('SSUP', 'SSUP · Suplidos'),
-    ], string='Tipo de impuesto Freematica',
+        _MATCH_STATES, string='Estado coincidencia anterior', compute='_compute_freematica_link',
+        inverse='_inverse_freematica_link')
+    freematica_prev_cod_aux = fields.Char(
+        string='Código auxiliar anterior', compute='_compute_freematica_link', inverse='_inverse_freematica_link')
+    freematica_prev_default_account = fields.Char(
+        string='Cuenta por defecto anterior', compute='_compute_freematica_link', inverse='_inverse_freematica_link')
+    freematica_matched_at = fields.Datetime(
+        string='Última resolución Freematica', compute='_compute_freematica_link', inverse='_inverse_freematica_link')
+    freematica_tipo_impuesto = fields.Selection(
+        TAX_TYPES, string='Tipo de impuesto Freematica', compute='_compute_freematica_link',
+        inverse='_inverse_freematica_link',
         help='Tipo de impuesto (BORRID_TIMPUES) para las facturas de este proveedor cuando no '
              'es el habitual: intracomunitarias (S2/S21), inversión del sujeto pasivo (S15), '
              'importación (S3), no deducible (S1)... Vacío = automático: S0, S4 para bases '
              'al 0 % y S10 si la factura trae retención de IRPF. Tabla de Servinet, 2026-11.')
     freematica_has_irpf = fields.Boolean(
-        string='Facturas con IRPF',
+        string='Facturas con IRPF', compute='_compute_freematica_link', inverse='_inverse_freematica_link',
         help='Marcar si este proveedor es un profesional/autónomo sujeto a retención de '
              'IRPF (aplica a todas sus facturas, no varía factura a factura). Determina qué '
              'plantilla (BORR_PLANT) se usa al enviar sus facturas a Freematica: '
              'freematica.config.plantilla_irpf en vez de plantilla_normal. Finia no calcula '
-             'ni extrae el importe de la retención hoy — esto solo decide la plantilla.',
-    )
+             'ni extrae el importe de la retención hoy — esto solo decide la plantilla.')
+    # Campo del módulo base: la cuenta de gasto por defecto es de cada empresa de
+    # Freematica (cada una tiene su plan de cuentas), así que pasa a ser del vínculo.
+    default_accounting_account = fields.Char(compute='_compute_freematica_link', inverse='_inverse_freematica_link',
+                                             search='_search_freematica_default_account')
+
+    _FREEMATICA_LINK_FIELDS = {
+        'freematica_cod_aux': 'cod_aux',
+        'freematica_provider_id': 'provider_id',
+        'freematica_match_score': 'match_score',
+        'freematica_match_state': 'match_state',
+        'freematica_prev_provider_id': 'prev_provider_id',
+        'freematica_prev_match_state': 'prev_match_state',
+        'freematica_prev_cod_aux': 'prev_cod_aux',
+        'freematica_prev_default_account': 'prev_default_account',
+        'freematica_matched_at': 'matched_at',
+        'freematica_tipo_impuesto': 'tipo_impuesto',
+        'freematica_has_irpf': 'has_irpf',
+        'default_accounting_account': 'default_accounting_account',
+    }
+
+    @api.depends_context('freematica_config_id')
+    @api.depends('freematica_link_ids.cod_aux', 'freematica_link_ids.provider_id',
+                 'freematica_link_ids.match_score', 'freematica_link_ids.match_state',
+                 'freematica_link_ids.prev_provider_id', 'freematica_link_ids.prev_match_state',
+                 'freematica_link_ids.prev_cod_aux', 'freematica_link_ids.prev_default_account',
+                 'freematica_link_ids.matched_at', 'freematica_link_ids.tipo_impuesto',
+                 'freematica_link_ids.has_irpf', 'freematica_link_ids.default_accounting_account')
+    def _compute_freematica_link(self):
+        config_id = self.env['freematica.config']._current().id
+        links = {
+            link.vendor_id.id: link for link in self.env['freematica.vendor.link'].sudo().search(
+                [('vendor_id', 'in', self.ids), ('config_id', '=', config_id)])
+        }
+        for vendor in self:
+            link = links.get(vendor.id)
+            for field_name, link_field in self._FREEMATICA_LINK_FIELDS.items():
+                if link:
+                    vendor[field_name] = link[link_field]
+                else:
+                    vendor[field_name] = 'no_intentado' if link_field == 'match_state' else False
+
+    def _inverse_freematica_link(self):
+        config_id = self.env['freematica.config']._current().id
+        Link = self.env['freematica.vendor.link'].sudo()
+        for vendor in self:
+            vals = {}
+            for field_name, link_field in self._FREEMATICA_LINK_FIELDS.items():
+                value = vendor[field_name]
+                vals[link_field] = value.id if hasattr(value, '_name') else value
+            link = Link.search([('vendor_id', '=', vendor.id), ('config_id', '=', config_id)], limit=1)
+            if link:
+                link.write(vals)
+            elif any(value for key, value in vals.items() if key != 'match_state') \
+                    or vals.get('match_state') not in (False, 'no_intentado'):
+                Link.create(dict(vals, vendor_id=vendor.id, config_id=config_id))
+
+    def _freematica_link_search(self, link_field, operator, value):
+        config_id = self.env['freematica.config']._current().id
+        Link = self.env['freematica.vendor.link'].sudo()
+        base = [('config_id', '=', config_id)]
+        empty = value is False or value is None or value == ''
+        if operator in ('=', '!=') and empty:
+            with_value = Link.search(base + [(link_field, '!=', False)]).mapped('vendor_id').ids
+            return [('id', 'in' if operator == '!=' else 'not in', with_value)]
+        links = Link.search(base + [(link_field, operator, value)])
+        domain = [('id', 'in', links.mapped('vendor_id').ids)]
+        if link_field == 'match_state':
+            wanted = value if isinstance(value, (list, tuple)) else [value]
+            if operator in ('=', 'in') and 'no_intentado' in wanted:
+                # Sin vínculo = "no intentado".
+                linked = Link.search(base).mapped('vendor_id').ids
+                return ['|'] + domain + [('id', 'not in', linked)]
+        return domain
+
+    def _search_freematica_cod_aux(self, operator, value):
+        return self._freematica_link_search('cod_aux', operator, value)
+
+    def _search_freematica_match_state(self, operator, value):
+        return self._freematica_link_search('match_state', operator, value)
+
+    def _search_freematica_default_account(self, operator, value):
+        return self._freematica_link_search('default_accounting_account', operator, value)
 
     def _freematica_resolve_provider(self, force=False):
         """Intenta matchear este proveedor Finia contra el catálogo cacheado
@@ -132,7 +205,7 @@ class FiniaOcrVendor(models.Model):
         # emparejó por parecido con Soteras Motor y el asiento fue a otro
         # proveedor). Queda "Sin coincidencia" para darlo de alta o asignarlo.
         if not provider and match_state != 'varios_nif' and not normalized_nif:
-            threshold = self.env['freematica.config'].get_active_config().provider_match_threshold
+            threshold = self.env['freematica.config']._current().provider_match_threshold
             candidates = [(p.id, p.nombre_pro) for p in Provider.search(group) if p.nombre_pro]
             best_id, best_score = matching.best_match(self.name, candidates, threshold=threshold)
             score = best_score
@@ -160,12 +233,15 @@ class FiniaOcrVendor(models.Model):
         self.write(vals)
         return self.freematica_provider_id
 
-    def _freematica_pending_invoices_domain(self):
+    def _freematica_pending_invoices_domain(self, config=None):
         """Facturas que se van a enviar a Freematica: procesadas o
-        contabilizadas, no enviadas y recibidas desde el inicio de envíos."""
-        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        contabilizadas, no enviadas y recibidas desde el inicio de envíos
+        (de la empresa de la configuración)."""
+        config = config or self.env['freematica.config']._current()
         domain = [('state', 'in', ('procesado', 'revisado', 'contabilizado', 'irregularidades')),
                   ('freematica_state', '!=', 'enviado')]
+        if config.empresa_id:
+            domain.append(('empresa_id', '=', config.empresa_id.id))
         if config.fecha_inicio_envio:
             since = fields.Datetime.to_datetime(config.fecha_inicio_envio)
             domain += ['|', ('reception_date', '>=', since),
@@ -173,14 +249,20 @@ class FiniaOcrVendor(models.Model):
         return domain
 
     @api.model
-    def _freematica_match_pending(self, retry_unmatched=True):
+    def _freematica_match_pending(self, retry_unmatched=True, config=None):
         """Empareja con el catálogo de Freematica los proveedores de las
         facturas pendientes de enviar que aún no lo están, para avisar ANTES
-        de enviar (antes solo se intentaba al pulsar Enviar). Devuelve los
-        proveedores que siguen sin coincidencia."""
+        de enviar (antes solo se intentaba al pulsar Enviar). Sin `config`
+        recorre todas las configuraciones activas. Devuelve los proveedores que
+        siguen sin coincidencia (de la última configuración procesada)."""
+        if config is None:
+            result = self.browse()
+            for each in self.env['freematica.config'].sudo().search([('active', '=', True)], order='id'):
+                result = self._freematica_match_pending(retry_unmatched, each)
+            return result
         states = _RETRY_STATES if retry_unmatched else ('no_intentado',)
-        invoices = self.env['finia.invoice'].sudo().search(self._freematica_pending_invoices_domain())
-        vendors = invoices.mapped('ocr_vendor_id').filtered(
+        invoices = self.env['finia.invoice'].sudo().search(self._freematica_pending_invoices_domain(config))
+        vendors = invoices.mapped('ocr_vendor_id').with_context(freematica_config_id=config.id).filtered(
             lambda v: v.freematica_match_state in states and not v.freematica_cod_aux)
         for vendor in vendors:
             try:
@@ -194,15 +276,16 @@ class FiniaOcrVendor(models.Model):
         self._freematica_match_pending()
 
     @api.model
-    def freematica_vendor_alerts(self):
+    def freematica_vendor_alerts(self, config=None):
         """Proveedores de facturas pendientes de enviar que no existen (o no
         se reconocen) en Freematica, con sus facturas: lo que muestra el panel
         de avisos del frontend."""
+        config = config or self.env['freematica.config']._current()
         invoices = self.env['finia.invoice'].sudo().search(
-            self._freematica_pending_invoices_domain() + [('ocr_vendor_id', '!=', False)],
+            self._freematica_pending_invoices_domain(config) + [('ocr_vendor_id', '!=', False)],
             order='reception_date desc, id desc')
         alerts = []
-        for vendor in invoices.mapped('ocr_vendor_id'):
+        for vendor in invoices.mapped('ocr_vendor_id').with_context(freematica_config_id=config.id):
             if vendor.freematica_cod_aux:
                 continue
             vendor_invoices = invoices.filtered(lambda i: i.ocr_vendor_id == vendor)
