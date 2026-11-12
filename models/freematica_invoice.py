@@ -101,10 +101,27 @@ class FiniaInvoice(models.Model):
             ('freematica_state', '=', 'enviado'),
         ])
         year = self.ocr_invoice_date and self.ocr_invoice_date.year
-        # Mismo número y mismo año (hay proveedores que reinician la numeración).
-        return candidates.filtered(
-            lambda inv: re.sub(r'[^A-Z0-9]', '', (inv.ocr_invoice_number or '').upper()) == number
-            and (not year or not inv.ocr_invoice_date or inv.ocr_invoice_date.year == year))[:1]
+
+        def _norm(inv):
+            return re.sub(r'[^A-Z0-9]', '', (inv.ocr_invoice_number or '').upper())
+
+        def _same_number_and_year(inv):
+            # Mismo número y mismo año (hay proveedores que reinician la numeración).
+            return _norm(inv) == number and (
+                not year or not inv.ocr_invoice_date or inv.ocr_invoice_date.year == year)
+
+        def _near_duplicate(inv):
+            # El OCR a veces lee el número distinto en dos copias de la misma factura
+            # (FINIA/00226 "2026/10992071" = FINIA/00318 "2026/1099207167"): un número
+            # contiene al otro y coinciden fecha e importe.
+            other = _norm(inv)
+            short, long_ = sorted((number, other), key=len)
+            return (
+                len(short) >= 6 and short in long_
+                and self.ocr_invoice_date and inv.ocr_invoice_date == self.ocr_invoice_date
+                and abs((inv.ocr_total_amount or 0.0) - (self.ocr_total_amount or 0.0)) < 0.01)
+
+        return candidates.filtered(lambda inv: _same_number_and_year(inv) or _near_duplicate(inv))[:1]
 
     def _freematica_header_rates(self, line_by_rate, retention):
         """Base e IVA por tipo a partir del cuadro de IVA de cabecera que leyó
@@ -195,6 +212,15 @@ class FiniaInvoice(models.Model):
         if not self.ocr_invoice_date:
             problems.append('falta la fecha de factura')
             problem_codes.append('missing_invoice_date')
+        else:
+            hoy = datetime.now(pytz.timezone('Europe/Madrid')).date()
+            fecha = self.ocr_invoice_date
+            if fecha.year < hoy.year - 1 or (fecha - hoy).days > 7:
+                problems.append(
+                    'la fecha de factura (%s) no es plausible (año muy antiguo o futura): '
+                    'probablemente el OCR la leyó mal. Corrígela en Finia antes de enviar'
+                    % fecha.strftime('%d/%m/%Y'))
+                problem_codes.append('invoice_date_out_of_range')
         duplicate = self._freematica_sent_duplicate()
         if duplicate:
             problems.append(
