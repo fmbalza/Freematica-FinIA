@@ -23,7 +23,7 @@ _SYNC_PAGE_SIZE = 100
 # latencia real de red permita y guarda un cursor para retomar en la
 # siguiente — se adapta sola a que un día la API esté más lenta que otro,
 # a diferencia de un número fijo de páginas por corrida.
-_SYNC_TIME_BUDGET_SECONDS = 90
+_SYNC_TIME_BUDGET_SECONDS = 60
 
 
 class FreematicaAccount(models.Model):
@@ -105,6 +105,7 @@ class FreematicaAccount(models.Model):
         existing_by_key = {(r.cod_plan, r.cod_cta): r for r in self.search([])}
 
         page = config.accounts_sync_next_page or 1
+        base_count = config.accounts_sync_count_so_far or 0
         total = None
         count_this_run = 0
         finished = False
@@ -155,6 +156,13 @@ class FreematicaAccount(models.Model):
                 page_was_short = len(items) < _SYNC_PAGE_SIZE
                 page_reached_total = total is not None and page * _SYNC_PAGE_SIZE >= total
                 page += 1
+                # El cursor se guarda en cada página: si el cron muere por limit_time_real
+                # (Servinet, 09/09/2026: 10 timeouts seguidos desde la misma página) la
+                # siguiente corrida retoma donde se quedó en vez de repetir.
+                config.write({
+                    'accounts_sync_next_page': page,
+                    'accounts_sync_count_so_far': base_count + count_this_run,
+                })
                 self.env.cr.commit()
 
                 if page_was_short or page_reached_total:
@@ -165,7 +173,7 @@ class FreematicaAccount(models.Model):
             self.env.cr.commit()
             raise
 
-        count_so_far = (config.accounts_sync_count_so_far or 0) + count_this_run
+        count_so_far = base_count + count_this_run
         if finished:
             config.write({
                 'accounts_sync_next_page': 1,

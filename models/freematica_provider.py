@@ -16,7 +16,7 @@ _SYNC_PAGE_SIZE = 500
 # cursor reanudable, por el mismo riesgo de superar limit_time_real (menor
 # aquí con solo ~4 páginas para 1828 proveedores, pero el mecanismo es
 # igual de válido si el catálogo crece o la red está lenta ese día).
-_SYNC_TIME_BUDGET_SECONDS = 90
+_SYNC_TIME_BUDGET_SECONDS = 60
 
 
 class FreematicaProvider(models.Model):
@@ -157,6 +157,7 @@ class FreematicaProvider(models.Model):
         existing_by_key = {r.cod_pro: r for r in self.search([])}
 
         page = config.providers_sync_next_page or 1
+        base_count = config.providers_sync_count_so_far or 0
         total = None
         count_this_run = 0
         finished = False
@@ -210,6 +211,13 @@ class FreematicaProvider(models.Model):
                 page_was_short = len(items) < _SYNC_PAGE_SIZE
                 page_reached_total = total is not None and page * _SYNC_PAGE_SIZE >= total
                 page += 1
+                # El cursor se guarda en cada página: si el cron muere por limit_time_real
+                # (Servinet, 09/09/2026: 10 timeouts seguidos desde la misma página) la
+                # siguiente corrida retoma donde se quedó en vez de repetir.
+                config.write({
+                    'providers_sync_next_page': page,
+                    'providers_sync_count_so_far': base_count + count_this_run,
+                })
                 self.env.cr.commit()
 
                 if page_was_short or page_reached_total:
@@ -220,7 +228,7 @@ class FreematicaProvider(models.Model):
             self.env.cr.commit()
             raise
 
-        count_so_far = (config.providers_sync_count_so_far or 0) + count_this_run
+        count_so_far = base_count + count_this_run
         if finished:
             config.write({
                 'providers_sync_next_page': 1,
