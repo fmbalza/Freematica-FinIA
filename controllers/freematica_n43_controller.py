@@ -20,6 +20,11 @@ def _body():
         return {}
 
 
+def _is_true(value):
+    """Freematica manda los booleanos como texto ('0'/'1'): bool('0') sería True."""
+    return str(value).strip().lower() in ('1', 'true', 's', 'si', 'sí', 'y', 'yes')
+
+
 def _connection(connection_id, tenant_id):
     return request.env['finia.bank.connection'].sudo().search([
         ('id', '=', connection_id), ('company_partner_id', '=', tenant_id),
@@ -52,7 +57,7 @@ class FreematicaN43Controller(http.Controller):
             'cuenta_bancaria': item.get('CCC_CUENTA'),
             'cuenta_contable': item.get('CUENTA'),
             'iban': item.get('CCC_IBAN'),
-            'inactiva': bool(item.get('CMB_INACTIVA')),
+            'inactiva': _is_true(item.get('CMB_INACTIVA')),
         } for item in items]}, 200)
 
     @http.route('/api/v1/bank-connections/<int:connection_id>/freematica-banco', type='http', auth='public',
