@@ -28,10 +28,11 @@ _SYNC_TIME_BUDGET_SECONDS = 60
 
 class FreematicaAccount(models.Model):
     _name = 'freematica.account'
+    _inherit = 'freematica.catalog.mixin'
     _description = 'Cuenta contable Freematica (caché de /pcon/v2/cuentas)'
     _order = 'cod_cta'
     _sql_constraints = [
-        ('cod_plan_cta_unique', 'unique(cod_plan, cod_cta)',
+        ('cod_plan_cta_unique', 'unique(config_id, cod_plan, cod_cta)',
          'Ya existe esa cuenta para ese plan contable.'),
     ]
 
@@ -57,12 +58,13 @@ class FreematicaAccount(models.Model):
             )
 
     @api.model
-    def search_for_picker(self, query, limit=20):
+    def search_for_picker(self, query, limit=20, config=None):
         """Búsqueda para el selector de cuenta en el frontend: solo cuentas
         activas e imputables (subcuenta=True), por código o por descripción
         (normalizada, sin acentos/mayúsculas). Sin texto de búsqueda,
         devuelve las primeras `limit` cuentas (orden por código) en vez de
         nada — para poder "navegar" el catálogo antes de escribir."""
+        self = self._freematica_scoped(config)
         query = (query or '').strip()
         # El grupo 1 (capital, reservas, deudas a l/p) nunca es cuenta de gasto:
         # sin este filtro, sin texto salía primero 10000000 "Capital social" y
@@ -102,7 +104,7 @@ class FreematicaAccount(models.Model):
         now = fields.Datetime.now()
         deadline = time.monotonic() + _SYNC_TIME_BUDGET_SECONDS
 
-        existing_by_key = {(r.cod_plan, r.cod_cta): r for r in self.search([])}
+        existing_by_key = {(r.cod_plan, r.cod_cta): r for r in self.search([('config_id', '=', config.id)])}
 
         page = config.accounts_sync_next_page or 1
         base_count = config.accounts_sync_count_so_far or 0
@@ -145,7 +147,7 @@ class FreematicaAccount(models.Model):
                         if changed:
                             existing.write(vals)
                     else:
-                        to_create.append(dict(vals, last_synced_at=now))
+                        to_create.append(dict(vals, config_id=config.id, last_synced_at=now))
                     count_this_run += 1
 
                 if to_create:

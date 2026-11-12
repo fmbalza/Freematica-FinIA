@@ -19,11 +19,12 @@ _MAX_PAGES = 200
 
 class FreematicaArticle(models.Model):
     _name = 'freematica.article'
+    _inherit = 'freematica.catalog.mixin'
     _description = 'Artículo Freematica (caché de /part/v1/articulos)'
     _order = 'cod_articulo'
     _rec_name = 'cod_articulo'
     _sql_constraints = [
-        ('cod_articulo_unique', 'unique(cod_articulo)', 'Ya existe un artículo Freematica con ese código.'),
+        ('cod_articulo_unique', 'unique(config_id, cod_articulo)', 'Ya existe un artículo Freematica con ese código.'),
     ]
 
     cod_articulo = fields.Char(string='Código', required=True, index=True)
@@ -59,12 +60,12 @@ class FreematicaArticle(models.Model):
                     }
             if len(items) < _PAGE_SIZE:
                 break
-        existing = {a.cod_articulo: a for a in self.search([])}
+        existing = {a.cod_articulo: a for a in self.search([('config_id', '=', config.id)])}
         for code, vals in seen.items():
             if code in existing:
                 existing[code].write(vals)
             else:
-                self.create(dict(vals, cod_articulo=code))
+                self.create(dict(vals, cod_articulo=code, config_id=config.id))
         stale = self.browse([a.id for code, a in existing.items() if code not in seen])
         if seen and stale:
             stale.unlink()

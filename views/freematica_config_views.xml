@@ -6,6 +6,7 @@
         <field name="arch" type="xml">
             <list>
                 <field name="name"/>
+                <field name="empresa_id"/>
                 <field name="host"/>
                 <field name="x_auth_organization"/>
                 <field name="x_auth_company"/>
@@ -34,6 +35,7 @@
                             <field name="active"/>
                             <field name="host"/>
                             <field name="x_auth_organization"/>
+                            <field name="empresa_id"/>
                             <field name="x_auth_company"/>
                             <field name="x_auth_session"/>
                             <field name="x_auth_app"/>

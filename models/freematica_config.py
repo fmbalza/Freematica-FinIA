@@ -16,6 +16,13 @@ class FreematicaConfig(models.Model):
 
     name = fields.Char(default='Freematica', required=True)
     active = fields.Boolean(default=True)
+    empresa_id = fields.Many2one(
+        'finia.empresa', string='Empresa (Finia)', index=True, ondelete='restrict',
+        help='Empresa de Finia a la que pertenece esta conexión con Freematica (una por empresa '
+             'de Freematica: X-Auth-Company). Las facturas y albaranes de la empresa se envían con '
+             'esta configuración y sus catálogos (cuentas, proveedores, artículos). Los documentos '
+             'sin empresa (anteriores a las empresas) usan la configuración más antigua.',
+    )
 
     # ── Conexión ───────────────────────────────────────────────────────
     host = fields.Char(
@@ -210,12 +217,35 @@ class FreematicaConfig(models.Model):
     )
 
     @api.model
-    def get_active_config(self):
-        config = self.search([('active', '=', True)], limit=1)
-        if not config:
+    def get_config_for(self, empresa=None):
+        """Configuración de Freematica de una empresa de Finia (recordset o id).
+
+        - Con empresa: la configuración activa ligada a esa empresa; si no hay
+          ninguna, error (nunca se cae a la de otra empresa: enviaría los datos
+          a la empresa equivocada de Freematica).
+        - Sin empresa (documentos anteriores a las empresas): la configuración
+          activa más antigua.
+        """
+        empresa_id = getattr(empresa, 'id', empresa) or False
+        configs = self.search([('active', '=', True)], order='id')
+        if empresa_id:
+            match = configs.filtered(lambda c: c.empresa_id.id == empresa_id)[:1]
+            if match:
+                return match
+            empresa_name = self.env['finia.empresa'].sudo().browse(empresa_id).display_name
+            raise UserError(
+                'La empresa "%s" no tiene configuración de Freematica. Crea una en '
+                'FinIA - Freematica > Configuración y asígnale esa empresa.' % empresa_name)
+        if not configs:
             raise UserError('No hay ninguna configuración de Freematica activa. Crea una en '
-                             'FinIA - Freematica > Configuración.')
-        return config
+                            'FinIA - Freematica > Configuración.')
+        return configs[:1]
+
+    @api.model
+    def get_active_config(self):
+        """Configuración por defecto (la más antigua): para los sitios que aún no
+        saben de qué empresa son. Preferir `get_config_for(empresa)`."""
+        return self.get_config_for(None)
 
     def _as_client_config(self):
         self.ensure_one()

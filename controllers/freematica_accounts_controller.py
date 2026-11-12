@@ -130,7 +130,7 @@ class FreematicaAccountsController(http.Controller):
         except (TypeError, ValueError):
             limit = 20
         try:
-            accounts = request.env['freematica.account'].sudo().search_for_picker(query, limit=limit)
+            accounts = request.env['freematica.account'].sudo()._freematica_scoped().search_for_picker(query, limit=limit)
             return json_response({
                 'success': True,
                 'data': [{
@@ -173,7 +173,7 @@ class FreematicaAccountsController(http.Controller):
             domain += ['|', ('cod_cta', 'like', query), ('normalized_des', 'ilike', normalized_query)]
 
         try:
-            Account = request.env['freematica.account'].sudo()
+            Account = request.env['freematica.account'].sudo()._freematica_scoped()
             total = Account.search_count(domain)
             accounts = Account.search(domain, limit=limit, offset=offset, order='cod_cta')
             return json_response({
@@ -200,7 +200,7 @@ class FreematicaAccountsController(http.Controller):
             return json_response({'success': False, 'error': 'cod_cta es obligatorio'}, 200)
         cod_plan = (body.get('cod_plan') or 'PGCS').strip()
 
-        Account = request.env['freematica.account'].sudo()
+        Account = request.env['freematica.account'].sudo()._freematica_scoped()
         existing = Account.search([('cod_plan', '=', cod_plan), ('cod_cta', '=', cod_cta)], limit=1)
         if existing:
             return json_response({
@@ -215,6 +215,7 @@ class FreematicaAccountsController(http.Controller):
             'des_cta2': body.get('des_cta2'),
             'cta_activa': body.get('cta_activa', True),
             'subcuenta': body.get('subcuenta', True),
+            'config_id': Account.env.context.get('freematica_config_id'),
         }
         try:
             account = Account.create(vals)
@@ -233,7 +234,7 @@ class FreematicaAccountsController(http.Controller):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         body = _read_json_body()
-        account = request.env['freematica.account'].sudo().browse(account_id)
+        account = request.env['freematica.account'].sudo()._freematica_scoped().browse(account_id)
         if not account.exists():
             return json_response({'success': False, 'error': 'Cuenta no encontrada'}, 200)
         vals = {k: body[k] for k in ('des_cta', 'des_cta2', 'cta_activa', 'subcuenta') if k in body}
@@ -306,7 +307,7 @@ class FreematicaAccountsController(http.Controller):
         if amount <= 0:
             return json_response({'success': False, 'error': 'amount debe ser mayor que 0'}, 200)
 
-        Account = request.env['freematica.account'].sudo()
+        Account = request.env['freematica.account'].sudo()._freematica_scoped()
         account = None
         if body.get('account_id'):
             account = Account.browse(int(body['account_id']))
@@ -460,7 +461,7 @@ class FreematicaAccountsController(http.Controller):
             if not invoice.exists():
                 return json_response({'success': False, 'error': 'Invoice not found'}, 200)
 
-            Account = request.env['freematica.account'].sudo()
+            Account = request.env['freematica.account'].sudo()._freematica_scoped()
 
             def _validate_account(code):
                 if code.startswith('1'):

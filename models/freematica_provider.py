@@ -21,10 +21,11 @@ _SYNC_TIME_BUDGET_SECONDS = 60
 
 class FreematicaProvider(models.Model):
     _name = 'freematica.provider'
+    _inherit = 'freematica.catalog.mixin'
     _description = 'Proveedor Freematica (caché de /pgrl/v2/proveedores)'
     _order = 'nombre_pro'
     _sql_constraints = [
-        ('cod_pro_unique', 'unique(cod_pro)', 'Ya existe un proveedor Freematica con ese COD_PRO.'),
+        ('cod_pro_unique', 'unique(config_id, cod_pro)', 'Ya existe un proveedor Freematica con ese COD_PRO.'),
     ]
 
     cod_pro = fields.Char(string='COD_PRO', required=True, index=True)
@@ -84,11 +85,12 @@ class FreematicaProvider(models.Model):
         }
 
     @api.model
-    def _freematica_group_domain(self):
-        """Solo las fichas del grupo de proveedores de los asientos (o sin
-        grupo conocido, hasta la próxima sincronización)."""
-        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
-        return [('cod_grupo_pro', 'in', (config.grupo_aux_proveedor or 1, 0))]
+    def _freematica_group_domain(self, config=None):
+        """Solo las fichas de la configuración, del grupo de proveedores de los
+        asientos (o sin grupo conocido, hasta la próxima sincronización)."""
+        config = config or self.env['freematica.config'].sudo().get_config_for(None)
+        return [('config_id', '=', config.id),
+                ('cod_grupo_pro', 'in', (config.grupo_aux_proveedor or 1, 0))]
 
     @api.model
     def freematica_search(self, query, limit=20):
@@ -154,7 +156,7 @@ class FreematicaProvider(models.Model):
         now = fields.Datetime.now()
         deadline = time.monotonic() + _SYNC_TIME_BUDGET_SECONDS
 
-        existing_by_key = {r.cod_pro: r for r in self.search([])}
+        existing_by_key = {r.cod_pro: r for r in self.search([('config_id', '=', config.id)])}
 
         page = config.providers_sync_next_page or 1
         base_count = config.providers_sync_count_so_far or 0
@@ -200,7 +202,7 @@ class FreematicaProvider(models.Model):
                         if changed:
                             existing.write(vals)
                     else:
-                        to_create.append(dict(vals, last_synced_at=now))
+                        to_create.append(dict(vals, config_id=config.id, last_synced_at=now))
                     count_this_run += 1
 
                 if to_create:

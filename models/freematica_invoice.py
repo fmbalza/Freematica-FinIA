@@ -200,7 +200,12 @@ class FiniaInvoice(models.Model):
         if not (self.ocr_invoice_number or self.name):
             problems.append('falta el número de factura')
             problem_codes.append('missing_invoice_number')
-        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        try:
+            config = self.env['freematica.config'].sudo().get_config_for(self.empresa_id)
+        except UserError as error:
+            config = self.env['freematica.config']
+            problems.append(str(error))
+            problem_codes.append('no_active_config')
         recibida = fields.Datetime.to_datetime(self.reception_date or self.create_date)
         if config.fecha_inicio_envio and recibida and recibida.date() < config.fecha_inicio_envio:
             problems.append(

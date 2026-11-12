@@ -202,7 +202,7 @@ class FreematicaVendorSettingsController(http.Controller):
                 if code:
                     if code.startswith('1'):
                         return _error('La cuenta "%s" es del grupo 1: no es una cuenta de gasto.' % code)
-                    exists = request.env['freematica.account'].sudo().search(
+                    exists = request.env['freematica.account'].sudo()._freematica_scoped().search(
                         [('cod_cta', '=', code), ('cta_activa', '=', True), ('subcuenta', '=', True)], limit=1)
                     if not exists:
                         return _error('La cuenta "%s" no existe en el plan de cuentas de Freematica.' % code)

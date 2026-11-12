@@ -96,11 +96,23 @@ class FiniaAlbaran(models.Model):
             return article.cod_iva, _PERCENT_BY_CPIVA[article.cod_iva]
         return None, None
 
+    def _freematica_config(self):
+        """Configuración de Freematica de la empresa del albarán (vacía si no hay)."""
+        self.ensure_one()
+        try:
+            return self.env['freematica.config'].sudo().get_config_for(self.empresa_id)
+        except UserError:
+            return self.env['freematica.config']
+
     def _freematica_articles(self):
         codes = {(c or '').strip() for c in self.mapped('line_ids.product_code') if c}
         if not codes:
             return {}
-        found = self.env['freematica.article'].sudo().search([('cod_articulo', 'in', list(codes))])
+        config = self[:1]._freematica_config() if self else self.env['freematica.config']
+        if not config:
+            return {}
+        found = self.env['freematica.article'].sudo()._freematica_scoped(config).search(
+            [('cod_articulo', 'in', list(codes))])
         return {a.cod_articulo: a for a in found}
 
     def _freematica_check_albaran(self, config):
@@ -365,7 +377,7 @@ class FiniaAlbaran(models.Model):
         return None
 
     def _freematica_fail_line(self, index, total, numdoc, message, warnings):
-        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
+        config = self._freematica_config() if len(self) == 1 else self.env['freematica.config']
         known = self._freematica_known_error_action(message, config)
         if index == 0:
             problem = 'Freematica rechazó el albarán: %s' % message
@@ -385,9 +397,9 @@ class FiniaAlbaran(models.Model):
     def action_freematica_send(self):
         """Envío manual (botón): también reintenta los que están en error,
         continuando desde la última línea que entró."""
-        config = self.env['freematica.config'].sudo().get_active_config()
         results = {}
         for albaran in self:
+            config = self.env['freematica.config'].sudo().get_config_for(albaran.empresa_id)
             results[albaran.id] = albaran.sudo()._freematica_send_one(config)
         return results
 
@@ -395,9 +407,9 @@ class FiniaAlbaran(models.Model):
         """Tras borrar el albarán en Freematica: olvida el número y las líneas
         enviadas para mandarlo entero de nuevo. Queda anotado en el registro
         del albarán (número anterior incluido) por si hay que deshacerlo."""
-        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
-        keep_numdoc = bool(config and config.albaranes_numdoc_propio)
         for albaran in self:
+            config = albaran._freematica_config()
+            keep_numdoc = bool(config and config.albaranes_numdoc_propio)
             if albaran.freematica_state == 'enviando':
                 raise UserError(_('El albarán se está enviando ahora mismo; espera a que termine.'))
             previous = (albaran.freematica_state, albaran.freematica_numdoc, albaran.freematica_lines_sent)
@@ -419,6 +431,8 @@ class FiniaAlbaran(models.Model):
     @api.model
     def _freematica_pending_albaranes_domain(self, config):
         domain = [('source', '=', 'excel'), ('freematica_state', 'in', ('no_enviado', 'bloqueado'))]
+        if config.empresa_id:
+            domain.append(('empresa_id', '=', config.empresa_id.id))
         if config.albaranes_fecha_inicio:
             domain.append(('ocr_albaran_date', '>=', config.albaranes_fecha_inicio))
         return domain
@@ -441,9 +455,11 @@ class FiniaAlbaran(models.Model):
 
     @api.model
     def _cron_freematica_send_albaranes(self):
-        config = self.env['freematica.config'].sudo().search([('active', '=', True)], limit=1)
-        if not config:
-            return
+        for config in self.env['freematica.config'].sudo().search([('active', '=', True)], order='id'):
+            self._freematica_cron_send_for(config)
+
+    @api.model
+    def _freematica_cron_send_for(self, config):
         if not config.albaranes_envio_activo:
             # Sin envío automático: solo se comprueba qué falta, para avisar ya.
             pending = self.sudo().search(self._freematica_pending_albaranes_domain(config), limit=500)

@@ -98,7 +98,7 @@ class FreematicaSendableMixin(models.AbstractModel):
             return {'success': False, 'error': message, 'error_codes': problem_codes}
 
         try:
-            config = self.env['freematica.config'].get_active_config()
+            config = self.env['freematica.config'].get_config_for(getattr(self, 'empresa_id', False))
         except UserError as error:
             message = str(error)
             self.write({'freematica_state': 'error', 'freematica_error': message})
