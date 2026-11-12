@@ -10,3 +10,5 @@ from . import freematica_ocr_vendor
 from . import freematica_log
 from . import freematica_article
 from . import freematica_albaran
+from . import freematica_n43_export
+from . import freematica_bank_connection

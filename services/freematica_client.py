@@ -32,6 +32,8 @@ LOCALIZACIONES_PAGO_PROVEEDORES_PATH = '/pgrl/v2/localizaciones-pago-proveedores
 ALBARANES_COMPRAS_PATH = '/comp/v2/albaranes-compras'
 ARTICULOS_PATH = '/part/v1/articulos'
 CUENTAS_PATH = '/pcon/v2/cuentas'
+BANCOS_PATH = '/pgrl/v2/bancos'
+IMPORTAR_N43_PATH = '/ptes/v1/importar-fichero-n43'
 
 # Claves, dentro de una línea de asiento, que representan listas de objetos y
 # que deben serializarse también si `lineas_as_json_string` está activo.
@@ -331,3 +333,22 @@ def test_connection(config, token=None):
         raise FreematicaError('Freematica: falta configurar X-Auth-Company para probar la conexión.')
     current_year = datetime.now(timezone.utc).year
     return export_asientos(config, empresa=empresa, cal=current_year, items=1, token=token)
+
+
+def list_bancos(config, token=None):
+    """GET /pgrl/v2/bancos — cuentas bancarias de la empresa. `COD_BANCO` es el
+    código interno por cuenta que pide el importador de N43 (no la entidad)."""
+    return _request(config, 'GET', BANCOS_PATH, 'bancos', token=token)
+
+
+def import_n43(config, banco, file_name, file_content, token=None):
+    """POST /ptes/v1/importar-fichero-n43 — importa un fichero Norma 43 en la
+    tesorería de Freematica. `banco` es el COD_BANCO (4 caracteres) y
+    `file_content` los bytes del fichero. La respuesta no tiene esquema
+    documentado: se devuelve tal cual."""
+    body = {
+        'banco': str(banco),
+        'fileName': file_name,
+        'fileBase64': base64.b64encode(file_content).decode('ascii'),
+    }
+    return _request(config, 'POST', IMPORTAR_N43_PATH, 'importar-fichero-n43', json_body=body, token=token)

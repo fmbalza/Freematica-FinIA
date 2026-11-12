@@ -4,3 +4,4 @@ access_freematica_provider_all,freematica.provider.all,model_freematica_provider
 access_freematica_account_all,freematica.account.all,model_freematica_account,,1,1,1,1
 access_freematica_payment_term_all,freematica.payment.term.all,model_freematica_payment_term,,1,1,1,1
 access_freematica_article_all,freematica.article.all,model_freematica_article,,1,1,1,1
+access_freematica_n43_export_all,freematica.n43.export.all,model_freematica_n43_export,,1,1,1,1
