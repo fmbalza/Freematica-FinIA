@@ -103,8 +103,11 @@ class FreematicaN43Controller(http.Controller):
         connection = _connection(connection_id, tenant_id)
         if not connection:
             return json_response({'success': False, 'error': 'Conexión bancaria no encontrada'}, 200)
-        return json_response({'success': True, 'data': [{
-            'id': e.id, 'date_from': str(e.date_from), 'date_to': str(e.date_to), 'filename': e.filename,
-            'movements': e.movements_count, 'state': e.state, 'sent_at': str(e.sent_at),
-            'error': e.response if e.state == 'error' else None,
-        } for e in connection.freematica_n43_export_ids[:50]]}, 200)
+        return json_response({'success': True, 'data': {
+            'cod_banco': connection.freematica_cod_banco or None,
+            'exports': [{
+                'id': e.id, 'date_from': str(e.date_from), 'date_to': str(e.date_to), 'filename': e.filename,
+                'movements': e.movements_count, 'state': e.state, 'sent_at': str(e.sent_at),
+                'error': e.response if e.state == 'error' else None,
+            } for e in connection.freematica_n43_export_ids[:50]],
+        }}, 200)
