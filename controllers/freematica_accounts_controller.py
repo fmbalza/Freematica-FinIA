@@ -138,7 +138,7 @@ class FreematicaAccountsController(http.Controller):
         except (TypeError, ValueError):
             limit = 20
         try:
-            accounts = request.env['freematica.account'].sudo()._freematica_scoped().search_for_picker(query, limit=limit)
+            accounts = request.env['freematica.account'].sudo()._freematica_scoped(_request_config(kwargs)).search_for_picker(query, limit=limit)
             return json_response({
                 'success': True,
                 'data': [{
@@ -181,7 +181,7 @@ class FreematicaAccountsController(http.Controller):
             domain += ['|', ('cod_cta', 'like', query), ('normalized_des', 'ilike', normalized_query)]
 
         try:
-            Account = request.env['freematica.account'].sudo()._freematica_scoped()
+            Account = request.env['freematica.account'].sudo()._freematica_scoped(_request_config(kwargs))
             total = Account.search_count(domain)
             accounts = Account.search(domain, limit=limit, offset=offset, order='cod_cta')
             return json_response({
@@ -208,7 +208,7 @@ class FreematicaAccountsController(http.Controller):
             return json_response({'success': False, 'error': 'cod_cta es obligatorio'}, 200)
         cod_plan = (body.get('cod_plan') or 'PGCS').strip()
 
-        Account = request.env['freematica.account'].sudo()._freematica_scoped()
+        Account = request.env['freematica.account'].sudo()._freematica_scoped(_request_config(kwargs))
         existing = Account.search([('cod_plan', '=', cod_plan), ('cod_cta', '=', cod_cta)], limit=1)
         if existing:
             return json_response({
@@ -242,7 +242,7 @@ class FreematicaAccountsController(http.Controller):
         if request.httprequest.method == 'OPTIONS':
             return cors_preflight_response()
         body = _read_json_body()
-        account = request.env['freematica.account'].sudo()._freematica_scoped().browse(account_id)
+        account = request.env['freematica.account'].sudo()._freematica_scoped(_request_config(kwargs)).browse(account_id)
         if not account.exists():
             return json_response({'success': False, 'error': 'Cuenta no encontrada'}, 200)
         vals = {k: body[k] for k in ('des_cta', 'des_cta2', 'cta_activa', 'subcuenta') if k in body}
@@ -315,7 +315,7 @@ class FreematicaAccountsController(http.Controller):
         if amount <= 0:
             return json_response({'success': False, 'error': 'amount debe ser mayor que 0'}, 200)
 
-        Account = request.env['freematica.account'].sudo()._freematica_scoped()
+        Account = request.env['freematica.account'].sudo()._freematica_scoped(_request_config(kwargs))
         account = None
         if body.get('account_id'):
             account = Account.browse(int(body['account_id']))
@@ -425,6 +425,14 @@ class FreematicaAccountsController(http.Controller):
                 # Cuentas del grupo 1 (capital, reservas...): no son de gasto.
                 ('line_ids.accounting_account', '=like', '1%'),
             ]
+            empresa_id = request.params.get('empresa_id')
+            if empresa_id:
+                Config = request.env['freematica.config'].sudo()
+                empresa_domain = [('empresa_id', '=', int(empresa_id))]
+                if Config.get_config_for(int(empresa_id)) == Config.get_config_for(None):
+                    # Las facturas sin empresa usan la configuración por defecto.
+                    empresa_domain = ['|', ('empresa_id', '=', False)] + empresa_domain
+                domain = domain + empresa_domain
             total_count = Invoice.search_count(domain)
             invoices = Invoice.search(domain, limit=limit, offset=offset, order='accounting_date desc, id desc')
             return json_response({
@@ -469,7 +477,8 @@ class FreematicaAccountsController(http.Controller):
             if not invoice.exists():
                 return json_response({'success': False, 'error': 'Invoice not found'}, 200)
 
-            Account = request.env['freematica.account'].sudo()._freematica_scoped()
+            Account = request.env['freematica.account'].sudo()._freematica_scoped(
+                request.env['freematica.config'].sudo().get_config_for(invoice.empresa_id))
 
             def _validate_account(code):
                 if code.startswith('1'):
