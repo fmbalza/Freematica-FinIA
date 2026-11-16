@@ -3,7 +3,7 @@
 
 Reglas de Josep (Freematica, 04/11/2026):
 - Un albarán de N líneas son N llamadas que repiten la cabecera; la línea
-  se numera en ALCL_NUMLINEA (1, 2, 3...) y ALCL_CODLINEA es C1 si la línea
+  se numera en ALCL_LINDOC (1, 2, 3...) y ALCL_CODLINEA es C1 si la línea
   tiene artículo y C6 si es solo texto.
 - ALCC_NUMDOC lo pone Freematica (el siguiente suyo): se manda 0 en la
   primera línea y el resto usa el número que devuelve. 2026-11-10: el contador
@@ -213,7 +213,7 @@ class FiniaAlbaran(models.Model):
             'ALCL_CODDOC': header['ALCC_CODDOC'],
             'ALCL_NUMDOC': header['ALCC_NUMDOC'],
             'ALCL_FCHDOC': header['ALCC_FCHDOC'],
-            'ALCL_NUMLINEA': number,
+            'ALCL_LINDOC': number,
             'ALCL_DESCRIP': _cut(line.name, 40),
         }
         if len((line.name or '').strip()) > 40:
