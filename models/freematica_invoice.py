@@ -222,7 +222,7 @@ class FiniaInvoice(models.Model):
         else:
             hoy = datetime.now(pytz.timezone('Europe/Madrid')).date()
             fecha = self.ocr_invoice_date
-            if fecha.year < hoy.year - 1 or (fecha - hoy).days > 7:
+            if fecha.year < hoy.year - 1 or (fecha - hoy).days > 35:
                 problems.append(
                     'la fecha de factura (%s) no es plausible (año muy antiguo o futura): '
                     'probablemente el OCR la leyó mal. Corrígela en Finia antes de enviar'
