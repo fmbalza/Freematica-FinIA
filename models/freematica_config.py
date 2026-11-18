@@ -126,10 +126,9 @@ class FreematicaConfig(models.Model):
         help='Fecha del albarán a partir de la cual se envían. Servinet: los servicios de '
              'octubre de 2026 en adelante.')
     albaranes_numdoc_propio = fields.Boolean(
-        string='Numerar los albaranes desde Finia (ALCC_NUMDOC)', default=True,
-        help='Finia pone el nº de albarán con su propia secuencia (freematica.albaran.numdoc, desde 1). '
-             'Desmarcar para mandar 0 y que lo asigne Freematica (solo si su contador de albaranes de compra '
-             'tiene numeración).')
+        string='Numerar los albaranes desde Finia (en desuso)', default=False,
+        help='Ya no se usa: desde 2026-11-17 el nº de albarán (ALCC_NUMDOC) lo asigna Freematica y no se '
+             'manda. Se conserva el campo para no romper la base de datos.')
     albaranes_delegacion = fields.Char(string='Delegación (ALCC_DELEG)', default='9999')
     albaranes_cod_documento = fields.Char(string='Código documento (ALCC_CODDOC)', default='2')
     albaranes_almacen = fields.Char(string='Almacén (ALCL_CODALMACEN)', default='01')

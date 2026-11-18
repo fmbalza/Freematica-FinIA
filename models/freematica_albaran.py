@@ -1,27 +1,23 @@
 # -*- coding: utf-8 -*-
 """Envío de albaranes de compra a Freematica (POST /comp/v2/albaranes-compras).
 
-Reglas de Josep (Freematica, 04/11/2026):
-- Un albarán de N líneas son N llamadas que repiten la cabecera; la línea
-  se numera en ALCL_LINDOC (1, 2, 3...) y ALCL_CODLINEA es C1 si la línea
-  tiene artículo y C6 si es solo texto.
-- ALCC_NUMDOC lo pone Freematica (el siguiente suyo): se manda 0 en la
-  primera línea y el resto usa el número que devuelve. 2026-11-10: el contador
-  de Freematica para estos albaranes no tiene numeración ("El contador asociado
-  no dispone de numeración", HTTP 400) y Sonia confirma que no hay albaranes
-  contabilizados, así que Finia los numera desde 1 con su propia secuencia
-  (`freematica.albaran.numdoc`, ajuste "Numerar los albaranes desde Finia").
-- CODDOC 2, DELEG 9999, almacén 01, LOC_PAGO 1, SERIEFRA C0, divisa EUR,
-  fechas AAAAMMDD, tipos de IVA como en los asientos.
-- Si entra responde 200 y si no 400. Para corregir uno ya enviado hay que
-  borrarlo en Freematica y volver a enviarlo.
+Formato (ejemplo de Josep, Freematica, 2026-11-17; probado con éxito 2026-11-17):
+- UNA sola llamada por albarán: la cabecera ALCC_* y un array "lineas" con las
+  líneas ALCL_*. (Antes se mandaba una llamada por línea con cabecera y línea
+  mezcladas: Freematica respondía siempre "El contador asociado no dispone de
+  numeración".)
+- ALCC_NUMDOC y ALCL_NUMDOC no se mandan: lo asigna Freematica y lo devuelve
+  en la respuesta (data.lineas[].ALCL_NUMDOC).
+- La línea se numera en ALCL_LINDOC de 10 en 10 (10, 20, 30...) y
+  ALCL_CODLINEA es C1 si la línea tiene artículo y C6 si es solo texto.
+- Fechas de la cabecera "dd/mm/aaaa 0:00:00"; las de las líneas "aaaa-mm-dd".
+- CODDOC 2, DELEG 9999, almacén 01, LOC_PAGO 1, SERIEFRA C0, divisa EUR.
+- Si entra responde 200 y si no 400. Entra entero o no entra: no hay envíos a
+  medias. Para corregir uno ya enviado hay que borrarlo en Freematica y volver
+  a enviarlo (Reiniciar envío).
 
 Sonia (Servinet): se envían en cuanto llegan, desde los de octubre de 2026.
-Solo los albaranes recibidos en Excel (los únicos que traen precio).
-
-Si un envío falla a mitad, se guarda cuántas líneas entraron y con qué
-número, para continuar desde ahí (Reintentar) o empezar de cero tras
-borrarlo en Freematica (Reiniciar envío)."""
+Solo los albaranes recibidos en Excel (los únicos que traen precio)."""
 import logging
 import time
 from datetime import timedelta
@@ -38,14 +34,15 @@ _CPIVA_BY_PERCENT = {0: '0', 4: '3', 10: '2', 21: '1'}
 _PERCENT_BY_CPIVA = {code: percent for percent, code in _CPIVA_BY_PERCENT.items()}
 _CODLINEA_ARTICULO = 'C1'
 _CODLINEA_TEXTO = 'C6'
-_FREEMATICA_NUMDOC_SEQUENCE = 'freematica.albaran.numdoc'
+_LINDOC_STEP = 10
 _STALE_SENDING = timedelta(minutes=30)
 _CRON_BUDGET_SECONDS = 60
 _CRON_BATCH = 30
 
 
-def _fecha(value):
-    return value.strftime('%Y%m%d') if value else False
+def _fecha_cabecera(value):
+    """Cabecera: dd/mm/aaaa 0:00:00 (formato del ejemplo de Freematica)."""
+    return value.strftime('%d/%m/%Y') + ' 0:00:00' if value else False
 
 
 def _clean(values):
@@ -179,40 +176,38 @@ class FiniaAlbaran(models.Model):
 
     # ── Payload ─────────────────────────────────────────────────────────
 
-    def _freematica_header(self, config, cod_pro, numdoc, fpago):
+    def _freematica_header(self, config, cod_pro, fpago):
         self.ensure_one()
         vendor = self.ocr_vendor_id
-        fecha = _fecha(self.ocr_albaran_date)
+        fecha = _fecha_cabecera(self.ocr_albaran_date)
+        loc_pago = config.albaranes_loc_pago or '1'
         header = {
             'ALCC_CODEMP': config.x_auth_company,
-            'ALCC_DELEG': config.albaranes_delegacion or '9999',
             'ALCC_CODPRO': cod_pro,
-            'ALCC_CODDOC': config.albaranes_cod_documento or '2',
-            'ALCC_NUMDOC': numdoc or 0,
             'ALCC_FCHDOC': fecha,
+            'ALCC_DELEG': config.albaranes_delegacion or '9999',
+            'ALCC_CODDOC': config.albaranes_cod_documento or '2',
             'ALCC_SERIEFRA': config.albaranes_serie_factura or 'C0',
-            'ALCC_LOC_PAGO': config.albaranes_loc_pago or '1',
-            'ALCC_CODDIVISA': config.albaranes_divisa or 'EUR',
+            'ALCC_LOC_PAGO': int(loc_pago) if str(loc_pago).isdigit() else loc_pago,
+            'ALCC_FPAGO': fpago,
+            'ALCC_REFERENCIA': _cut(self.excel_invoice_number or self.name, 40),
             'ALCC_TIPO_IVA': vendor.freematica_tipo_impuesto or 'S0',
+            'ALCC_CODDIVISA': config.albaranes_divisa or 'EUR',
             'ALCC_NUMALB_PRO': _cut(self.ocr_albaran_number, 12),
             'ALCC_FCHALB_PRO': fecha,
-            'ALCC_FCHENTREGA': _fecha(self.ocr_delivery_date) or fecha,
-            'ALCC_REFERENCIA': _cut(self.excel_invoice_number or self.name, 40),
             'ALCC_OBSERVACIONES': _cut(self.ocr_notes, 255),
         }
-        if fpago:
-            header['ALCC_FPAGO'] = fpago
         return _clean(header)
 
     def _freematica_line_payload(self, config, header, line, number, articles):
+        """Una línea del array "lineas". `number` es ALCL_LINDOC (10, 20...)."""
         code = (line.product_code or '').strip()
         common = {
             'ALCL_CODEMP': header['ALCC_CODEMP'],
             'ALCL_DELEG': header['ALCC_DELEG'],
             'ALCL_CODPRO': header['ALCC_CODPRO'],
             'ALCL_CODDOC': header['ALCC_CODDOC'],
-            'ALCL_NUMDOC': header['ALCC_NUMDOC'],
-            'ALCL_FCHDOC': header['ALCC_FCHDOC'],
+            'ALCL_FCHDOC': self.ocr_albaran_date.isoformat(),
             'ALCL_LINDOC': number,
             'ALCL_DESCRIP': _cut(line.name, 40),
         }
@@ -220,36 +215,48 @@ class FiniaAlbaran(models.Model):
             common['ALCL_DESC_AMPLIADA'] = line.name.strip()
         if not code:
             common['ALCL_CODLINEA'] = _CODLINEA_TEXTO
-            return dict(header, **_clean(common))
+            return _clean(common)
         cpiva, percent = self._freematica_line_tax(line, articles)
         common.update({
             'ALCL_CODLINEA': _CODLINEA_ARTICULO,
             'ALCL_CODARTIC': code[:14],
             'ALCL_CODALMACEN': config.albaranes_almacen or '01',
-            'ALCL_CANTIDAD': line.quantity,
-            'ALCL_CAN_RECIB': line.quantity,
-            'ALCL_PRECIO': line.unit_price,
-            'ALCL_IMPORTE': line.amount,
             'ALCL_TIPO_IVA': header['ALCC_TIPO_IVA'],
-            'ALCL_CPORC_IVA': cpiva,
-            'ALCL_PPORC_IVA': percent,
-            'ALCL_FCHENTREGA': header.get('ALCC_FCHENTREGA'),
+            'ALCL_CANTIDAD': str(line.quantity),
+            'ALCL_PRECIO': str(line.unit_price),
+            'ALCL_PPORC_IVA': str(percent),
+            'ALCL_IMPORTE': str(line.amount),
         })
-        if line.uom:
-            common['ALCL_UN_MEDIDA'] = line.uom[:15]
-        if line.lot_number:
-            common['ALCL_CODLOTE'] = line.lot_number[:40]
-        return dict(header, **_clean(common))
+        return _clean(common)
+
+    def _freematica_payload(self, config):
+        """Cabecera + array "lineas", tal como lo espera Freematica."""
+        self.ensure_one()
+        lines = self._freematica_lines()
+        articles = self._freematica_articles()
+        vendor = self.ocr_vendor_id
+        fpago = (vendor.freematica_provider_id._freematica_localizacion_pago(config) or {}).get('fpago') \
+            if vendor.freematica_provider_id else False
+        header = self._freematica_header(config, vendor.freematica_cod_aux, fpago)
+        payload = dict(header)
+        payload['lineas'] = [
+            self._freematica_line_payload(config, header, line, (index + 1) * _LINDOC_STEP, articles)
+            for index, line in enumerate(lines)]
+        return payload
 
     @staticmethod
     def _freematica_extract_numdoc(response):
+        """Nº que Freematica asignó al albarán (data.lineas[].ALCL_NUMDOC)."""
         data = response.get('data') if isinstance(response, dict) else None
         if isinstance(data, list) and data:
             data = data[0]
-        if isinstance(data, dict):
+        if not isinstance(data, dict):
+            return 0
+        candidates = [data] + [l for l in (data.get('lineas') or []) if isinstance(l, dict)]
+        for item in candidates:
             for key in ('ALCC_NUMDOC', 'ALCL_NUMDOC'):
                 try:
-                    value = int(float(data.get(key) or 0))
+                    value = int(float(item.get(key) or 0))
                 except (TypeError, ValueError):
                     value = 0
                 if value:
@@ -273,8 +280,8 @@ class FiniaAlbaran(models.Model):
         })
 
     def _freematica_send_one(self, config):
-        """Envía (o continúa enviando) este albarán. Devuelve True si quedó
-        enviado. Nunca lanza: los fallos quedan en el propio albarán."""
+        """Envía este albarán (una llamada con todas las líneas). Devuelve True
+        si quedó enviado. Nunca lanza: los fallos quedan en el propio albarán."""
         self.ensure_one()
         self = self.with_context(freematica_config_id=config.id) if config else self
         if self.freematica_state == 'enviado':
@@ -295,18 +302,8 @@ class FiniaAlbaran(models.Model):
             return False
 
         lines = self._freematica_lines()
-        articles = self._freematica_articles()
-        vendor = self.ocr_vendor_id
-        fpago = (vendor.freematica_provider_id._freematica_localizacion_pago(config) or {}).get('fpago') \
-            if vendor.freematica_provider_id else False
         token = config._ensure_valid_token()
         client_config = config._as_client_config()
-        numdoc = self.freematica_numdoc
-        if not numdoc and config.albaranes_numdoc_propio:
-            # Se asigna una sola vez y se guarda: un reintento tras un rechazo
-            # reutiliza el mismo número en vez de dejar un hueco.
-            numdoc = self._freematica_assign_numdoc()
-        start = self.freematica_lines_sent if numdoc else 0
         self.write({
             'freematica_state': 'enviando',
             'freematica_lines_total': len(lines),
@@ -315,39 +312,26 @@ class FiniaAlbaran(models.Model):
         })
         self._freematica_commit()
 
-        for index in range(start, len(lines)):
-            header = self._freematica_header(config, vendor.freematica_cod_aux, numdoc, fpago)
-            payload = self._freematica_line_payload(config, header, lines[index], index + 1, articles)
-            try:
-                response = client.alta_albaran_compra(client_config, payload, token=token)
-            except client.FreematicaError as error:
-                return self._freematica_fail_line(index, len(lines), numdoc, error.mensaje, warnings)
-            except Exception as error:  # noqa: BLE001 - cualquier fallo queda registrado en el albarán
-                _logger.exception('Freematica: error enviando el albarán %s', self.id)
-                return self._freematica_fail_line(index, len(lines), numdoc, str(error), warnings)
-            if not numdoc:
-                numdoc = self._freematica_extract_numdoc(response)
-                if not numdoc:
-                    self.write({'freematica_lines_sent': index + 1})
-                    self._freematica_set_failure(
-                        'error',
-                        ['Freematica aceptó la línea 1 pero no devolvió el número de albarán, así que no se '
-                         'pueden añadir las demás líneas a ese mismo albarán.'],
-                        ['missing_numdoc'],
-                        ['Busca en Freematica el albarán de %s del %s, bórralo y pulsa "Reiniciar envío". '
-                         'Avisa a soporte de Finia: hay que revisar la respuesta de Freematica.'
-                         % (vendor.name, self.ocr_albaran_date.strftime('%d/%m/%Y'))],
-                        warnings)
-                    _logger.error('Freematica: alta de albarán %s sin NUMDOC en la respuesta: %s',
-                                  self.id, str(response)[:1000])
-                    self._freematica_commit()
-                    return False
-            self.write({'freematica_numdoc': numdoc, 'freematica_lines_sent': index + 1})
-            self._freematica_commit()
+        try:
+            response = client.alta_albaran_compra(client_config, self._freematica_payload(config), token=token)
+        except client.FreematicaError as error:
+            return self._freematica_fail(error.mensaje, warnings)
+        except Exception as error:  # noqa: BLE001 - cualquier fallo queda registrado en el albarán
+            _logger.exception('Freematica: error enviando el albarán %s', self.id)
+            return self._freematica_fail(str(error), warnings)
 
+        numdoc = self._freematica_extract_numdoc(response)
+        if not numdoc:
+            _logger.warning('Freematica: albarán %s enviado sin NUMDOC en la respuesta: %s',
+                            self.id, str(response)[:1000])
+            warnings = warnings + ['Freematica aceptó el albarán pero no devolvió su número; búscalo en '
+                                   'Freematica por el nº de albarán del proveedor.']
         self.write({
             'freematica_state': 'enviado',
+            'freematica_numdoc': numdoc,
+            'freematica_lines_sent': len(lines),
             'freematica_sent_at': fields.Datetime.now(),
+            'freematica_warning': '\n'.join(warnings) or False,
             'freematica_error': False,
             'freematica_error_codes': False,
             'freematica_action': False,
@@ -355,22 +339,13 @@ class FiniaAlbaran(models.Model):
         self._freematica_commit()
         return True
 
-    def _freematica_assign_numdoc(self):
-        """Nº de albarán (ALCC_NUMDOC) de la secuencia propia de Finia."""
-        self.ensure_one()
-        number = self.env['ir.sequence'].sudo().next_by_code(_FREEMATICA_NUMDOC_SEQUENCE)
-        if not number:
-            raise UserError(_('No existe la secuencia "%s".') % _FREEMATICA_NUMDOC_SEQUENCE)
-        self.write({'freematica_numdoc': int(number)})
-        return self.freematica_numdoc
-
     @api.model
     def _freematica_known_error_action(self, message, config):
         """Qué hacer ante los errores de Freematica que ya conocemos."""
         text = (message or '').lower()
         if 'contador' in text and 'numeraci' in text:
-            return ('Freematica no tiene numeración configurada para los albaranes de compra (documento %s, '
-                    'delegación %s). Hay que pedir a Freematica que la active; después pulsa "Reintentar".'
+            return ('Freematica no encuentra el contador de los albaranes de compra (documento %s, '
+                    'delegación %s). Hay que avisar a Freematica; después pulsa "Reintentar".'
                     % (config.albaranes_cod_documento, config.albaranes_delegacion))
         if 'articulo' in text or 'artículo' in text:
             return 'Da de alta en Freematica el artículo que indica el error y pulsa "Reintentar".'
@@ -378,19 +353,12 @@ class FiniaAlbaran(models.Model):
             return 'Revisa en Freematica la ficha del proveedor que indica el error y pulsa "Reintentar".'
         return None
 
-    def _freematica_fail_line(self, index, total, numdoc, message, warnings):
+    def _freematica_fail(self, message, warnings):
         config = self._freematica_config() if len(self) == 1 else self.env['freematica.config']
         known = self._freematica_known_error_action(message, config)
-        if index == 0:
-            problem = 'Freematica rechazó el albarán: %s' % message
-            action = known or 'Corrige lo que indica el error y pulsa "Reintentar".'
-        else:
-            problem = 'Freematica rechazó la línea %d de %d: %s' % (index + 1, total, message)
-            action = ((known + ' ') if known else '') + ('Las %d primeras líneas ya están en Freematica (albarán nº %s). Corrige el error y '
-                      'pulsa "Reintentar" para continuar desde la línea %d, o borra el albarán nº %s en '
-                      'Freematica y pulsa "Reiniciar envío" para enviarlo entero de nuevo.'
-                      % (index, numdoc, index + 1, numdoc))
-        self._freematica_set_failure('error', [problem], ['freematica_rejected'], [action], warnings)
+        self._freematica_set_failure(
+            'error', ['Freematica rechazó el albarán: %s' % message], ['freematica_rejected'],
+            [known or 'Corrige lo que indica el error y pulsa "Reintentar".'], warnings)
         self._freematica_commit()
         return False
 
@@ -410,16 +378,12 @@ class FiniaAlbaran(models.Model):
         enviadas para mandarlo entero de nuevo. Queda anotado en el registro
         del albarán (número anterior incluido) por si hay que deshacerlo."""
         for albaran in self:
-            config = albaran._freematica_config()
-            keep_numdoc = bool(config and config.albaranes_numdoc_propio)
             if albaran.freematica_state == 'enviando':
                 raise UserError(_('El albarán se está enviando ahora mismo; espera a que termine.'))
             previous = (albaran.freematica_state, albaran.freematica_numdoc, albaran.freematica_lines_sent)
             albaran.write({
                 'freematica_state': 'no_enviado',
-                # Numerado por Finia: se conserva el nº (el albarán borrado en
-                # Freematica libera el suyo) para no dejar hueco en la secuencia.
-                'freematica_numdoc': albaran.freematica_numdoc if keep_numdoc else 0,
+                'freematica_numdoc': 0,
                 'freematica_lines_sent': 0,
                 'freematica_sent_at': False,
                 'freematica_error': False,
